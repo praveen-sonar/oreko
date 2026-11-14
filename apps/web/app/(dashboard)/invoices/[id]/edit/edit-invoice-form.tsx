@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useRef, useCallback, useEffect } from 'react';
+import { useState, useMemo, useRef, useCallback, useEffect, type CSSProperties } from 'react';
 import { useRouter } from 'next/navigation';
 import { getSavedLineItems, type SavedLineItemData } from '@/lib/saved-items/actions';
 import {
@@ -270,6 +270,47 @@ function formatMoney(amount: number, currency: string): string {
   }).join('');
 }
 
+function parseDateOnly(value: string | null | undefined, fallback: Date): Date {
+  return value ? new Date(value + 'T00:00:00') : fallback;
+}
+
+function getInitialTaxRate(existingTaxRate: number | null | undefined): string {
+  return existingTaxRate ? `${existingTaxRate}%` : '0% - Default';
+}
+
+function toFormDiscountType(discountType: InvoiceDocument['totals']['discountType']): 'flat' | 'percent' {
+  return discountType === 'percentage' ? 'percent' : 'flat';
+}
+
+function calculateDiscountAmount(
+  subtotal: number,
+  discount: number,
+  discountType: 'flat' | 'percent'
+): number {
+  const raw = discountType === 'percent' ? subtotal * (discount / 100) : discount;
+  return Math.round(raw * 100) / 100;
+}
+
+function formatDateOr(
+  date: Date | undefined,
+  fallback: string,
+  pattern: string = 'MMM dd, yyyy'
+): string {
+  return date ? format(date, pattern) : fallback;
+}
+
+function pluralSuffix(count: number): string {
+  return count === 1 ? '' : 's';
+}
+
+function getCardBackgroundStyle(tpl: InvoiceTemplate): CSSProperties | undefined {
+  return tpl.bgTint ? { background: tpl.bgTint } : undefined;
+}
+
+function getBalanceDueBackground(tpl: InvoiceTemplate): string {
+  return tpl.accentBg.replace('bg-', '').includes('50') ? `${tpl.accent}10` : '#f5f5f5';
+}
+
 // ─── Main Component ──────────────────────────────────────
 export function EditInvoiceForm({
   invoice,
@@ -288,7 +329,7 @@ export function EditInvoiceForm({
   // Form State — pre-filled from invoice
   const [invoiceNumber] = useState(invoice.invoiceNumber);
   const [dueDate, setDueDate] = useState<Date | undefined>(
-    invoice.dueDate ? new Date(invoice.dueDate + 'T00:00:00') : new Date(Date.now() + 14 * 24 * 60 * 60 * 1000)
+    parseDateOnly(invoice.dueDate, new Date(Date.now() + 14 * 24 * 60 * 60 * 1000))
   );
   const [selectedClientId, setSelectedClientId] = useState<string>(invoice.clientId);
   const [lineItems, setLineItems] = useState<LineItem[]>(
@@ -300,16 +341,14 @@ export function EditInvoiceForm({
       rate: item.rate,
     }))
   );
-  const [taxRate, setTaxRate] = useState(
-    existingTaxRate ? `${existingTaxRate}%` : '0% - Default'
-  );
+  const [taxRate, setTaxRate] = useState(getInitialTaxRate(existingTaxRate));
   const [customTaxRate, setCustomTaxRate] = useState('');
   const [notes, setNotes] = useState(invoice.notes || 'Thank you for your business!');
 
   // Discount — pre-fill from invoice
   const [discount, setDiscount] = useState(invoice.totals.discountValue ?? 0);
   const [discountType, setDiscountType] = useState<'flat' | 'percent'>(
-    invoice.totals.discountType === 'percentage' ? 'percent' : 'flat'
+    toFormDiscountType(invoice.totals.discountType)
   );
 
   // Invoice Details Options
@@ -317,7 +356,7 @@ export function EditInvoiceForm({
   const [companyName, setCompanyName] = useState('');
   const [showIssueDate, setShowIssueDate] = useState(true);
   const [issueDate, setIssueDate] = useState<Date | undefined>(
-    invoice.issueDate ? new Date(invoice.issueDate + 'T00:00:00') : new Date()
+    parseDateOnly(invoice.issueDate, new Date())
   );
   const [showPoNumber, setShowPoNumber] = useState(false);
   const [poNumber, setPoNumber] = useState('');
@@ -377,7 +416,7 @@ export function EditInvoiceForm({
     return match?.[1] ? parseFloat(match[1]) : 0;
   }, [taxRate, customTaxRate]);
 
-  const discountAmount = Math.round((discountType === 'percent' ? subtotal * (discount / 100) : discount) * 100) / 100;
+  const discountAmount = calculateDiscountAmount(subtotal, discount, discountType);
   const discountedSubtotal = Math.max(0, Math.round((subtotal - discountAmount) * 100) / 100);
   const taxAmount = Math.round(discountedSubtotal * (parsedTaxPercent / 100) * 100) / 100;
   const total = Math.max(0, Math.round((discountedSubtotal + taxAmount) * 100) / 100);
@@ -705,14 +744,12 @@ export function EditInvoiceForm({
                             variant="outline"
                             className={cn(
                               'w-full justify-start text-left font-normal h-11 text-sm bg-card shadow-none',
-                              !issueDate && 'text-muted-foreground'
+                              { 'text-muted-foreground': !issueDate }
                             )}
                           >
                             <CalendarIcon className="mr-1 h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
                             <span className="truncate">
-                              {issueDate
-                                ? format(issueDate, 'MMM dd, yyyy')
-                                : 'Pick date'}
+                              {formatDateOr(issueDate, 'Pick date')}
                             </span>
                           </Button>
                         </PopoverTrigger>
@@ -737,14 +774,12 @@ export function EditInvoiceForm({
                           variant="outline"
                           className={cn(
                             'w-full justify-start text-left font-normal h-11 text-sm bg-card shadow-none',
-                            !dueDate && 'text-muted-foreground'
+                            { 'text-muted-foreground': !dueDate }
                           )}
                         >
                           <CalendarIcon className="mr-1 h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
                           <span className="truncate">
-                            {dueDate
-                              ? format(dueDate, 'MMM dd, yyyy')
-                              : 'Pick date'}
+                            {formatDateOr(dueDate, 'Pick date')}
                           </span>
                         </Button>
                       </PopoverTrigger>
@@ -945,11 +980,11 @@ export function EditInvoiceForm({
                                 variant="outline"
                                 className={cn(
                                   'w-full justify-start text-left font-normal h-10 text-sm',
-                                  !eventDate && 'text-muted-foreground'
+                                  { 'text-muted-foreground': !eventDate }
                                 )}
                               >
                                 <CalendarIcon className="mr-2 h-3.5 w-3.5" />
-                                {eventDate ? format(eventDate, 'MMM do, yyyy') : 'Event date'}
+                                {formatDateOr(eventDate, 'Event date', 'MMM do, yyyy')}
                               </Button>
                             </PopoverTrigger>
                             <PopoverContent className="w-auto p-0" align="start">
@@ -1473,9 +1508,9 @@ export function EditInvoiceForm({
               <div className={cn(
                 'bg-card border shadow-sm overflow-hidden transition-all duration-300 relative',
                 tpl.cardClass,
-                tpl.style === 'glassmorphism' && 'backdrop-blur-xl bg-white/70 border-white/40',
+                { 'backdrop-blur-xl bg-white/70 border-white/40': tpl.style === 'glassmorphism' },
               )}
-              style={tpl.bgTint ? { background: tpl.bgTint } : undefined}
+              style={getCardBackgroundStyle(tpl)}
               >
                 {/* ─── Subtle top-left wave decoration ─── */}
                 <svg className="absolute top-0 left-0 pointer-events-none" viewBox="0 0 200 120" fill="none" style={{ width: '45%', height: '100px' }}>
@@ -1533,7 +1568,7 @@ export function EditInvoiceForm({
                     {formatMoney(total, selectedCurrency)}
                   </p>
                   <p className="text-xs text-muted-foreground mt-1">
-                    Invoice #{invoiceNumber} &middot; Due {dueDate ? format(dueDate, 'MMM dd, yyyy') : '...'}
+                    Invoice #{invoiceNumber} &middot; Due {formatDateOr(dueDate, '...')}
                   </p>
                 </div>
 
@@ -1560,7 +1595,7 @@ export function EditInvoiceForm({
                           <ChevronUp
                             className={cn(
                               'h-3 w-3 transition-transform',
-                              !showPreviewDetails && 'rotate-180'
+                              { 'rotate-180': !showPreviewDetails }
                             )}
                           />
                         </button>
@@ -1647,7 +1682,7 @@ export function EditInvoiceForm({
                     className={cn(
                       'w-full h-12 rounded-lg font-medium text-sm flex items-center justify-center gap-2 transition-colors',
                       tpl.buttonColor,
-                      pdfGenerating && 'opacity-70 cursor-not-allowed'
+                      { 'opacity-70 cursor-not-allowed': pdfGenerating }
                     )}
                   >
                     {pdfGenerating ? (
@@ -1683,7 +1718,7 @@ export function EditInvoiceForm({
             <div className="p-4 flex-1 flex flex-col items-center">
               {/* Info line */}
               <p className="text-xs text-muted-foreground mb-3 w-full">
-                A4 Preview &middot; {lineItems.length} item{lineItems.length !== 1 ? 's' : ''}
+                A4 Preview &middot; {lineItems.length} item{pluralSuffix(lineItems.length)}
               </p>
 
               {/* A4 Scaled Preview */}
@@ -1703,7 +1738,7 @@ export function EditInvoiceForm({
                     disabled={pdfGenerating}
                     className={cn(
                       'absolute top-2.5 right-2.5 h-7 w-7 rounded-full bg-muted/80 hover:bg-muted transition-colors flex items-center justify-center z-20',
-                      pdfGenerating && 'opacity-70 cursor-not-allowed'
+                      { 'opacity-70 cursor-not-allowed': pdfGenerating }
                     )}
                     title="Download PDF"
                   >
@@ -1731,7 +1766,7 @@ export function EditInvoiceForm({
                         <h1 className="text-2xl font-bold tracking-tight" style={{ color: tpl.accent }}>INVOICE</h1>
                         <p className="text-xs mt-1" style={{ color: '#666' }}>#{invoiceNumber}</p>
                         <p className="text-xs" style={{ color: '#666' }}>
-                          Date: {dueDate ? format(dueDate, 'MMM dd, yyyy') : 'Not set'}
+                          Date: {formatDateOr(dueDate, 'Not set')}
                         </p>
                       </div>
                     </div>
@@ -1804,7 +1839,7 @@ export function EditInvoiceForm({
                           <span className="tabular-nums font-medium">{formatMoney(total, selectedCurrency)}</span>
                         </div>
                         <div className="flex justify-between py-2 mt-1 rounded px-2 -mx-2"
-                          style={{ background: tpl.accentBg.replace('bg-', '').includes('50') ? `${tpl.accent}10` : '#f5f5f5' }}
+                          style={{ background: getBalanceDueBackground(tpl) }}
                         >
                           <span className="text-xs font-bold" style={{ color: '#111' }}>Balance Due</span>
                           <span className="text-sm font-bold tabular-nums" style={{ color: tpl.accent }}>{formatMoney(total, selectedCurrency)}</span>
@@ -1844,7 +1879,7 @@ export function EditInvoiceForm({
                       <p className="text-xs text-muted-foreground">{businessName}</p>
                       <p className="font-bold text-lg mt-0.5" style={{ color: tpl.accent }}>Invoice</p>
                       <p className="text-xs text-muted-foreground mt-0.5">
-                        Due {dueDate ? format(dueDate, 'MMM dd, yyyy') : '...'}
+                        Due {formatDateOr(dueDate, '...')}
                       </p>
                     </div>
                   </div>
@@ -1971,7 +2006,7 @@ export function EditInvoiceForm({
                   <p style={{ fontSize: '22px', fontWeight: 700, color: tpl.accent, letterSpacing: '0.05em' }}>INVOICE</p>
                   <p style={{ fontSize: '11px', color: '#666', marginTop: '4px' }}>#{invoiceNumber}</p>
                   <p style={{ fontSize: '11px', color: '#666' }}>
-                    Date: {dueDate ? format(dueDate, 'MMM dd, yyyy') : 'Not set'}
+                    Date: {formatDateOr(dueDate, 'Not set')}
                   </p>
                 </div>
               </div>

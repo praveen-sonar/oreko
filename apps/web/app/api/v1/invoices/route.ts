@@ -80,6 +80,41 @@ export async function GET(request: NextRequest) {
   });
 }
 
+interface LineItemInput {
+  name: string;
+  description?: string;
+  quantity: number;
+  rate: number;
+  taxRate?: number;
+}
+
+function validateLineItem(item: LineItemInput): string | null {
+  // Bug #41: Validate line item name is non-empty
+  if (!item.name || typeof item.name !== 'string' || !item.name.trim()) {
+    return 'Line item name is required';
+  }
+  if (!Number.isFinite(item.quantity) || !Number.isFinite(item.rate)) {
+    return 'Line item quantity and rate must be valid numbers';
+  }
+  if (item.quantity < 0) return 'Line item quantity cannot be negative';
+  if (item.rate < 0) return 'Line item rate cannot be negative';
+  // Bug #40: Upper bound on rate and quantity
+  if (item.quantity > 1_000_000) return 'Line item quantity must be at most 1,000,000';
+  if (item.rate > 1_000_000) return 'Line item rate must be at most 1,000,000';
+  if (item.taxRate !== undefined && item.taxRate !== null && !Number.isFinite(item.taxRate)) {
+    return 'Line item taxRate must be a valid number';
+  }
+  return null;
+}
+
+function validateLineItems(items: LineItemInput[]): string | null {
+  for (const item of items) {
+    const error = validateLineItem(item);
+    if (error) return error;
+  }
+  return null;
+}
+
 // POST /api/v1/invoices — Create an invoice
 export async function POST(request: NextRequest) {
   const auth = await authenticateApiRequest(request);
@@ -106,7 +141,7 @@ export async function POST(request: NextRequest) {
     projectId?: string;
     currency?: string;
     dueDate?: string;
-    lineItems?: Array<{ name: string; description?: string; quantity: number; rate: number; taxRate?: number }>;
+    lineItems?: LineItemInput[];
     notes?: string;
     terms?: string;
   };
@@ -153,23 +188,8 @@ export async function POST(request: NextRequest) {
   if (items.length > 100) return apiError('Maximum 100 line items allowed', 400);
 
   // Validate line item values
-  for (const item of items) {
-    // Bug #41: Validate line item name is non-empty
-    if (!item.name || typeof item.name !== 'string' || !item.name.trim()) {
-      return apiError('Line item name is required', 400);
-    }
-    if (!Number.isFinite(item.quantity) || !Number.isFinite(item.rate)) {
-      return apiError('Line item quantity and rate must be valid numbers', 400);
-    }
-    if (item.quantity < 0) return apiError('Line item quantity cannot be negative', 400);
-    if (item.rate < 0) return apiError('Line item rate cannot be negative', 400);
-    // Bug #40: Upper bound on rate and quantity
-    if (item.quantity > 1_000_000) return apiError('Line item quantity must be at most 1,000,000', 400);
-    if (item.rate > 1_000_000) return apiError('Line item rate must be at most 1,000,000', 400);
-    if (item.taxRate !== undefined && item.taxRate !== null && !Number.isFinite(item.taxRate)) {
-      return apiError('Line item taxRate must be a valid number', 400);
-    }
-  }
+  const lineItemError = validateLineItems(items);
+  if (lineItemError) return apiError(lineItemError, 400);
 
   let subtotal = 0;
   let taxTotal = 0;

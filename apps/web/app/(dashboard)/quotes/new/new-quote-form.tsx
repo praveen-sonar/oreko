@@ -207,6 +207,54 @@ const QUOTE_TEMPLATES: Record<string, QuoteTemplate> = {
 
 type TemplateName = keyof typeof QUOTE_TEMPLATES;
 
+// ─── Helpers ─────────────────────────────────────────────
+const roundToCents = (value: number) => Math.round(value * 100) / 100;
+
+function getEffectiveTaxRate(customTaxRate: string, taxRate: string): number {
+  if (customTaxRate) return Number.parseFloat(customTaxRate);
+  if (taxRate !== 'custom' && taxRate !== '0% - Default') return Number.parseFloat(taxRate);
+  return 0;
+}
+
+// Round each line item to match server-side calculation (Bug #178)
+function computeQuoteTotals(
+  lineItems: LineItem[],
+  discount: number,
+  discountType: 'flat' | 'percent',
+  customTaxRate: string,
+  taxRate: string
+) {
+  const subtotal = roundToCents(
+    lineItems.reduce((acc, item) => acc + roundToCents(item.quantity * item.rate), 0)
+  );
+  const discountAmount = roundToCents(
+    discountType === 'percent' ? subtotal * (discount / 100) : discount
+  );
+  const effectiveTaxRate = getEffectiveTaxRate(customTaxRate, taxRate);
+  const discountedSubtotal = Math.max(0, roundToCents(subtotal - discountAmount));
+  const taxAmount =
+    effectiveTaxRate > 0 ? roundToCents(discountedSubtotal * (effectiveTaxRate / 100)) : 0;
+  const total = Math.max(0, roundToCents(discountedSubtotal + taxAmount));
+  return { subtotal, discountAmount, total };
+}
+
+function getExpirationDate(issueDate: Date | undefined, expirationDays: string) {
+  return issueDate ? addDays(issueDate, Number.parseInt(expirationDays) || 30) : undefined;
+}
+
+function formatDateOr(date: Date | undefined, pattern: string, fallback: string) {
+  return date ? format(date, pattern) : fallback;
+}
+
+function getPreviewDateLabel(expirationDate: Date | undefined, issueDate: Date | undefined) {
+  if (expirationDate) return `Valid until ${format(expirationDate, 'MMM dd, yyyy')}`;
+  return `Issued ${formatDateOr(issueDate, 'MMM dd, yyyy', '...')}`;
+}
+
+function pluralSuffix(count: number) {
+  return count === 1 ? '' : 's';
+}
+
 // ─── Main Component ──────────────────────────────────────
 interface NewQuoteFormProps {
   defaultCurrency?: string;
@@ -299,22 +347,15 @@ export default function NewQuoteForm({ defaultCurrency = 'USD' }: NewQuoteFormPr
 
   const tpl = (QUOTE_TEMPLATES[templateName] ?? QUOTE_TEMPLATES.clean) as QuoteTemplate;
 
-  // Round each line item to match server-side calculation (Bug #178)
-  const subtotal = Math.round(lineItems.reduce(
-    (acc, item) => acc + Math.round(item.quantity * item.rate * 100) / 100,
-    0
-  ) * 100) / 100;
-  const discountAmount = Math.round((discountType === 'percent'
-    ? subtotal * (discount / 100)
-    : discount) * 100) / 100;
-  const effectiveTaxRate = customTaxRate ? parseFloat(customTaxRate) : (taxRate !== 'custom' && taxRate !== '0% - Default' ? parseFloat(taxRate) : 0);
-  const discountedSubtotal = Math.max(0, Math.round((subtotal - discountAmount) * 100) / 100);
-  const taxAmount = effectiveTaxRate > 0 ? Math.round(discountedSubtotal * (effectiveTaxRate / 100) * 100) / 100 : 0;
-  const total = Math.max(0, Math.round((discountedSubtotal + taxAmount) * 100) / 100);
+  const { subtotal, discountAmount, total } = computeQuoteTotals(
+    lineItems,
+    discount,
+    discountType,
+    customTaxRate,
+    taxRate
+  );
 
-  const expirationDate = issueDate
-    ? addDays(issueDate, parseInt(expirationDays) || 30)
-    : undefined;
+  const expirationDate = getExpirationDate(issueDate, expirationDays);
 
   // ─── Handlers ────────────────────────────────────────
   const addLineItem = () => {
@@ -635,9 +676,7 @@ export default function NewQuoteForm({ defaultCurrency = 'USD' }: NewQuoteFormPr
                           )}
                         >
                           <CalendarIcon className="mr-2 h-3.5 w-3.5 text-muted-foreground" />
-                          {issueDate
-                            ? format(issueDate, 'MMM do, yyyy')
-                            : 'Pick date'}
+                          {formatDateOr(issueDate, 'MMM do, yyyy', 'Pick date')}
                         </Button>
                       </PopoverTrigger>
                       <PopoverContent className="w-auto p-0" align="start">
@@ -854,7 +893,7 @@ export default function NewQuoteForm({ defaultCurrency = 'USD' }: NewQuoteFormPr
                               )}
                             >
                               <CalendarIcon className="mr-2 h-3.5 w-3.5" />
-                              {eventDate ? format(eventDate, 'MMM do, yyyy') : 'Event date'}
+                              {formatDateOr(eventDate, 'MMM do, yyyy', 'Event date')}
                             </Button>
                           </PopoverTrigger>
                           <PopoverContent className="w-auto p-0" align="start">
@@ -1367,7 +1406,7 @@ export default function NewQuoteForm({ defaultCurrency = 'USD' }: NewQuoteFormPr
                     {formatCurrency(total, currency)}
                   </p>
                   <p className="text-xs text-muted-foreground mt-1">
-                    Quote #{quoteNumber} · {expirationDate ? `Valid until ${format(expirationDate, 'MMM dd, yyyy')}` : `Issued ${issueDate ? format(issueDate, 'MMM dd, yyyy') : '...'}`}
+                    Quote #{quoteNumber} · {getPreviewDateLabel(expirationDate, issueDate)}
                   </p>
                 </div>
 
@@ -1504,7 +1543,7 @@ export default function NewQuoteForm({ defaultCurrency = 'USD' }: NewQuoteFormPr
             {previewTab === 'pdf' && (
             <div className="p-4 flex-1 flex flex-col items-center">
               <p className="text-xs text-muted-foreground mb-3 w-full">
-                A4 Preview · {lineItems.length} item{lineItems.length !== 1 ? 's' : ''}
+                A4 Preview · {lineItems.length} item{pluralSuffix(lineItems.length)}
               </p>
 
               <div className="w-full overflow-hidden flex-1 flex items-start justify-center">
@@ -1547,7 +1586,7 @@ export default function NewQuoteForm({ defaultCurrency = 'USD' }: NewQuoteFormPr
                         <h1 className="text-2xl font-bold tracking-tight" style={{ color: tpl.accent }}>QUOTE</h1>
                         <p className="text-xs mt-1" style={{ color: '#666' }}>#{quoteNumber}</p>
                         <p className="text-xs" style={{ color: '#666' }}>
-                          Date: {issueDate ? format(issueDate, 'MMM dd, yyyy') : 'Not set'}
+                          Date: {formatDateOr(issueDate, 'MMM dd, yyyy', 'Not set')}
                         </p>
                         {expirationDate && (
                           <p className="text-xs" style={{ color: '#666' }}>
@@ -1653,7 +1692,7 @@ export default function NewQuoteForm({ defaultCurrency = 'USD' }: NewQuoteFormPr
                       <p className="text-xs text-muted-foreground">{businessName}</p>
                       <p className="font-bold text-lg mt-0.5" style={{ color: tpl.accent }}>Quote</p>
                       <p className="text-xs text-muted-foreground mt-0.5">
-                        Valid until {expirationDate ? format(expirationDate, 'MMM dd, yyyy') : '...'}
+                        Valid until {formatDateOr(expirationDate, 'MMM dd, yyyy', '...')}
                       </p>
                     </div>
                   </div>
@@ -1767,7 +1806,7 @@ export default function NewQuoteForm({ defaultCurrency = 'USD' }: NewQuoteFormPr
                   <p style={{ fontSize: '22px', fontWeight: 700, color: tpl.accent, letterSpacing: '0.05em' }}>QUOTE</p>
                   <p style={{ fontSize: '11px', color: '#666', marginTop: '4px' }}>#{quoteNumber}</p>
                   <p style={{ fontSize: '11px', color: '#666' }}>
-                    Date: {issueDate ? format(issueDate, 'MMM dd, yyyy') : 'Not set'}
+                    Date: {formatDateOr(issueDate, 'MMM dd, yyyy', 'Not set')}
                   </p>
                   {expirationDate && (
                     <p style={{ fontSize: '11px', color: '#666' }}>
