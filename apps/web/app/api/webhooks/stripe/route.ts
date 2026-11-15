@@ -41,68 +41,83 @@ export async function POST(request: NextRequest) {
       });
     } catch (err: unknown) {
       // P2002 = Prisma unique constraint violation — event already processed
-      if (err && typeof err === 'object' && 'code' in err && err.code === 'P2002') {
+      if (isUniqueConstraintError(err)) {
         return NextResponse.json({ received: true, duplicate: true });
       }
       throw err; // Re-throw unexpected errors
     }
 
-    switch (event.type) {
-      case 'payment_intent.succeeded': {
-        const paymentIntent = event.data.object as Stripe.PaymentIntent;
-        const charge = paymentIntent.latest_charge as Stripe.Charge | string | null;
-        const chargeId = typeof charge === 'string' ? charge : charge?.id;
-        const receiptUrl = typeof charge === 'object' ? charge?.receipt_url : undefined;
-
-        await processPaymentWebhook(
-          paymentIntent.id,
-          'succeeded',
-          chargeId ?? undefined,
-          receiptUrl ?? undefined
-        );
-        break;
-      }
-
-      case 'payment_intent.payment_failed': {
-        const paymentIntent = event.data.object as Stripe.PaymentIntent;
-        await processPaymentWebhook(paymentIntent.id, 'failed');
-        break;
-      }
-
-      case 'charge.refunded': {
-        const charge = event.data.object as Stripe.Charge;
-        const paymentIntentId = typeof charge.payment_intent === 'string'
-          ? charge.payment_intent
-          : charge.payment_intent?.id;
-        if (paymentIntentId) {
-          await processRefundWebhook(paymentIntentId, charge.amount_refunded);
-        } else {
-          logger.warn({ eventId: event.id }, '[stripe-webhook] Orphaned refund event: charge.payment_intent is null. Refund processed by Stripe but no matching payment in Oreko.');
-        }
-        break;
-      }
-
-      case 'account.updated': {
-        const account = event.data.object as Stripe.Account;
-        await processAccountUpdate(account);
-        break;
-      }
-
-      default:
-        logger.debug({ eventType: event.type }, 'Unhandled Stripe event type');
-    }
+    await handleStripeEvent(event);
 
     return NextResponse.json({ received: true });
   } catch (error) {
     logger.error({ err: error }, 'Error processing webhook');
-    // Permanent business logic errors (not found, invalid data) → 200 so Stripe stops retrying
-    const message = error instanceof Error ? error.message : '';
-    const isPermanent = message.includes('not found') || message.includes('invalid') || message.includes('already');
-    if (isPermanent) {
-      return NextResponse.json({ received: true, error: 'Permanent failure — will not retry' }, { status: 200 });
-    }
-    // Transient errors (DB timeout, network) → 500 so Stripe retries with exponential backoff
-    // Idempotency guard prevents duplicate processing on successful retry
-    return NextResponse.json({ error: 'Webhook processing failed' }, { status: 500 });
+    return buildProcessingErrorResponse(error);
   }
+}
+
+function isUniqueConstraintError(err: unknown): boolean {
+  return !!err && typeof err === 'object' && 'code' in err && err.code === 'P2002';
+}
+
+async function handleStripeEvent(event: Stripe.Event): Promise<void> {
+  switch (event.type) {
+    case 'payment_intent.succeeded':
+      await handlePaymentSucceeded(event.data.object as Stripe.PaymentIntent);
+      break;
+
+    case 'payment_intent.payment_failed': {
+      const paymentIntent = event.data.object as Stripe.PaymentIntent;
+      await processPaymentWebhook(paymentIntent.id, 'failed');
+      break;
+    }
+
+    case 'charge.refunded':
+      await handleChargeRefunded(event.data.object as Stripe.Charge, event.id);
+      break;
+
+    case 'account.updated': {
+      const account = event.data.object as Stripe.Account;
+      await processAccountUpdate(account);
+      break;
+    }
+
+    default:
+      logger.debug({ eventType: event.type }, 'Unhandled Stripe event type');
+  }
+}
+
+async function handlePaymentSucceeded(paymentIntent: Stripe.PaymentIntent): Promise<void> {
+  const charge = paymentIntent.latest_charge as Stripe.Charge | string | null;
+  const chargeId = typeof charge === 'string' ? charge : charge?.id;
+  const receiptUrl = typeof charge === 'object' ? charge?.receipt_url : undefined;
+
+  await processPaymentWebhook(
+    paymentIntent.id,
+    'succeeded',
+    chargeId ?? undefined,
+    receiptUrl ?? undefined
+  );
+}
+
+async function handleChargeRefunded(charge: Stripe.Charge, eventId: string): Promise<void> {
+  const paymentIntentId =
+    typeof charge.payment_intent === 'string' ? charge.payment_intent : charge.payment_intent?.id;
+  if (paymentIntentId) {
+    await processRefundWebhook(paymentIntentId, charge.amount_refunded);
+  } else {
+    logger.warn({ eventId }, '[stripe-webhook] Orphaned refund event: charge.payment_intent is null. Refund processed by Stripe but no matching payment in Oreko.');
+  }
+}
+
+function buildProcessingErrorResponse(error: unknown) {
+  // Permanent business logic errors (not found, invalid data) → 200 so Stripe stops retrying
+  const message = error instanceof Error ? error.message : '';
+  const isPermanent = message.includes('not found') || message.includes('invalid') || message.includes('already');
+  if (isPermanent) {
+    return NextResponse.json({ received: true, error: 'Permanent failure — will not retry' }, { status: 200 });
+  }
+  // Transient errors (DB timeout, network) → 500 so Stripe retries with exponential backoff
+  // Idempotency guard prevents duplicate processing on successful retry
+  return NextResponse.json({ error: 'Webhook processing failed' }, { status: 500 });
 }
