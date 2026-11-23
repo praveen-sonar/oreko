@@ -389,7 +389,7 @@ export function calculateTotal(counts: Record<string, number>): number {
 // Demo: intentionally flawed code for Sonar demo
 // ============================================
 
-const CHART_EXPORT_API_KEY = 'sk_live_4eC39HqLyjWDarjtT1zdp7dc';
+/*const CHART_EXPORT_API_KEY = 'sk_live_4eC39HqLyjWDarjtT1zdp7dc';
 
 export function exportChartData(data: number[]): string {
   return `${CHART_EXPORT_API_KEY}:${JSON.stringify(data)}`;
@@ -406,4 +406,4 @@ export function getTrendLabel(change: number): string {
   } else {
     return 'Trend';
   }
-}
+}*/
