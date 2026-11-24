@@ -9,6 +9,15 @@ interface RouteParams {
   params: Promise<{ id: string }>;
 }
 
+function validateRecipients(recipients?: string[]) {
+  if (!recipients) return null;
+  if (recipients.length > 10) return apiError('Maximum 10 recipients allowed', 400);
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  const invalid = recipients.filter((e) => !emailRegex.test(e));
+  if (invalid.length > 0) return apiError('One or more email addresses are invalid', 400);
+  return null;
+}
+
 // POST /api/v1/invoices/:id/send — Send an invoice to the client
 export async function POST(request: NextRequest, { params }: RouteParams) {
   try {
@@ -31,12 +40,8 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     };
 
     // Validate recipients
-    if (recipients) {
-      if (recipients.length > 10) return apiError('Maximum 10 recipients allowed', 400);
-      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-      const invalid = recipients.filter(e => !emailRegex.test(e));
-      if (invalid.length > 0) return apiError('One or more email addresses are invalid', 400);
-    }
+    const recipientsError = validateRecipients(recipients);
+    if (recipientsError) return recipientsError;
 
     // Fetch invoice with client
     const invoice = await prisma.invoice.findFirst({

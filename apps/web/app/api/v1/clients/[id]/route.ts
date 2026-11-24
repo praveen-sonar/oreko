@@ -33,6 +33,15 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
   });
 }
 
+// Keep only the fields that were explicitly provided
+function buildUpdateData(fields: Record<string, unknown>): Record<string, unknown> {
+  const updateData: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(fields)) {
+    if (value !== undefined) updateData[key] = value;
+  }
+  return updateData;
+}
+
 // PATCH /api/v1/clients/:id
 export async function PATCH(request: NextRequest, { params }: RouteParams) {
   const auth = await authenticateApiRequest(request);
@@ -88,19 +97,19 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
     return apiError('Client name cannot be empty', 400);
   }
 
-  const updateData: Record<string, unknown> = {};
-  if (name !== undefined) updateData.name = name;
-  if (email !== undefined) updateData.email = email;
-  if (phone !== undefined) updateData.phone = phone;
-  if (company !== undefined) updateData.company = company;
-  if (address !== undefined) updateData.address = address;
-  if (billingAddress !== undefined) updateData.billingAddress = billingAddress;
-  if (metadata !== undefined) {
-    if (JSON.stringify(metadata).length > 10000) {
-      return apiError('Metadata too large (max 10KB)', 400);
-    }
-    updateData.metadata = metadata;
+  if (metadata !== undefined && JSON.stringify(metadata).length > 10000) {
+    return apiError('Metadata too large (max 10KB)', 400);
   }
+
+  const updateData = buildUpdateData({
+    name,
+    email,
+    phone,
+    company,
+    address,
+    billingAddress,
+    metadata,
+  });
 
   const updated = await prisma.client.update({
     where: { id },

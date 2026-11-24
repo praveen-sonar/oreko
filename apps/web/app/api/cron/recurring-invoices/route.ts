@@ -81,33 +81,7 @@ export async function GET(request: Request) {
         }
 
         // Generate invoice number atomically
-        const seqResult = await prisma.$transaction(async (tx) => {
-          const updated = await tx.numberSequence.upsert({
-            where: {
-              workspaceId_type: { workspaceId: parent.workspaceId, type: 'invoice' },
-            },
-            update: { currentValue: { increment: 1 } },
-            create: {
-              workspaceId: parent.workspaceId,
-              type: 'invoice',
-              prefix: 'INV',
-              currentValue: 1,
-              padding: 4,
-            },
-          });
-          return {
-            prefix: updated.prefix || 'INV',
-            suffix: updated.suffix,
-            value: updated.currentValue,
-            padding: updated.padding,
-          };
-        });
-
-        const paddedValue = String(seqResult.value).padStart(seqResult.padding, '0');
-        const prefix = seqResult.prefix.replace(/-$/, '');
-        const parts = [prefix, paddedValue];
-        if (seqResult.suffix) parts.push(seqResult.suffix);
-        const invoiceNumber = parts.join('-');
+        const invoiceNumber = await generateInvoiceNumber(parent.workspaceId);
 
         // Calculate payment term days from parent
         const issueTodue = parent.dueDate.getTime() - parent.issueDate.getTime();
@@ -224,6 +198,36 @@ export async function GET(request: Request) {
       { status: 500 }
     );
   }
+}
+
+async function generateInvoiceNumber(workspaceId: string): Promise<string> {
+  const seqResult = await prisma.$transaction(async (tx) => {
+    const updated = await tx.numberSequence.upsert({
+      where: {
+        workspaceId_type: { workspaceId, type: 'invoice' },
+      },
+      update: { currentValue: { increment: 1 } },
+      create: {
+        workspaceId,
+        type: 'invoice',
+        prefix: 'INV',
+        currentValue: 1,
+        padding: 4,
+      },
+    });
+    return {
+      prefix: updated.prefix || 'INV',
+      suffix: updated.suffix,
+      value: updated.currentValue,
+      padding: updated.padding,
+    };
+  });
+
+  const paddedValue = String(seqResult.value).padStart(seqResult.padding, '0');
+  const prefix = seqResult.prefix.replace(/-$/, '');
+  const parts = [prefix, paddedValue];
+  if (seqResult.suffix) parts.push(seqResult.suffix);
+  return parts.join('-');
 }
 
 function calculateNextDate(fromDate: Date, interval: string): Date {
