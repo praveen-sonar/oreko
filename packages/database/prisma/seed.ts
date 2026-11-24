@@ -363,177 +363,18 @@ async function main() {
   // Link quotes to projects (round-robin)
   const projectIds = ['test-project-1', 'test-project-2', 'test-project-3'];
 
-  for (let i = 0; i < testQuotes.length; i++) {
-    const q = testQuotes[i]!;
-    const client = createdClients[i % createdClients.length]!;
-    const dateCfg = quoteDateConfigs[i]!;
-    const projectId = projectIds[i % projectIds.length]!;
-    const daysMs = 24 * 60 * 60 * 1000;
-
-    const issueDate = new Date(Date.now() - dateCfg.issueDaysAgo * daysMs);
-    const expirationDate = new Date(issueDate.getTime() + 30 * daysMs);
-    const sentAt = dateCfg.sentDaysAgo ? new Date(Date.now() - dateCfg.sentDaysAgo * daysMs) : null;
-    const viewedAt = dateCfg.viewedDaysAgo ? new Date(Date.now() - dateCfg.viewedDaysAgo * daysMs) : null;
-    const acceptedAt = dateCfg.acceptedDaysAgo ? new Date(Date.now() - dateCfg.acceptedDaysAgo * daysMs) : null;
-    const declinedAt = dateCfg.declinedDaysAgo ? new Date(Date.now() - dateCfg.declinedDaysAgo * daysMs) : null;
-
-    const quote = await prisma.quote.upsert({
-      where: {
-        workspaceId_quoteNumber: {
-          workspaceId: workspace.id,
-          quoteNumber: `Q-${String(i + 1).padStart(4, '0')}`,
-        },
-      },
-      update: {
-        status: q.status,
-        title: q.title,
-        subtotal: q.subtotal,
-        total: q.subtotal,
-        projectId,
-        settings: {}, // C03 fix: clear stale blocks so fallback reconstructs from lineItems
-        issueDate,
-        expirationDate,
-        sentAt,
-        viewedAt,
-        acceptedAt,
-        declinedAt,
-        deletedAt: null,
-      },
-      create: {
+  await Promise.all(
+    testQuotes.map((q, i) =>
+      seedTestQuote({
         workspaceId: workspace.id,
-        clientId: client.id,
-        projectId,
-        quoteNumber: `Q-${String(i + 1).padStart(4, '0')}`,
-        status: q.status,
-        title: q.title,
-        issueDate,
-        expirationDate,
-        subtotal: q.subtotal,
-        total: q.subtotal,
-        sentAt,
-        viewedAt,
-        acceptedAt,
-        declinedAt,
-      },
-    });
-
-    // Add line items (C03 fix: add multiple items per quote for realistic preview)
-    // Split the total into primary (70%) and secondary (30%) line items
-    const primaryAmount = Math.round(q.subtotal * 0.7 * 100) / 100;
-    const secondaryAmount = Math.round((q.subtotal - primaryAmount) * 100) / 100;
-    const primaryQty = Math.max(1, Math.round(q.qty * 0.7));
-    const secondaryQty = Math.max(1, q.qty - primaryQty);
-    const primaryRate = Math.round(primaryAmount / primaryQty * 100) / 100;
-    const secondaryRate = Math.round(secondaryAmount / secondaryQty * 100) / 100;
-
-    await prisma.quoteLineItem.upsert({
-      where: { id: `quote-item-${quote.id}` },
-      update: { name: q.itemName, quantity: primaryQty, rate: primaryRate, amount: Math.round(primaryQty * primaryRate * 100) / 100, sortOrder: 0 },
-      create: {
-        id: `quote-item-${quote.id}`,
-        quoteId: quote.id,
-        name: q.itemName,
-        quantity: primaryQty,
-        rate: primaryRate,
-        amount: Math.round(primaryQty * primaryRate * 100) / 100,
-        sortOrder: 0,
-      },
-    });
-    await prisma.quoteLineItem.upsert({
-      where: { id: `quote-item-2-${quote.id}` },
-      update: { name: 'Project Management', quantity: secondaryQty, rate: secondaryRate, amount: Math.round(secondaryQty * secondaryRate * 100) / 100, sortOrder: 1 },
-      create: {
-        id: `quote-item-2-${quote.id}`,
-        quoteId: quote.id,
-        name: 'Project Management',
-        quantity: secondaryQty,
-        rate: secondaryRate,
-        amount: Math.round(secondaryQty * secondaryRate * 100) / 100,
-        sortOrder: 1,
-      },
-    });
-
-    // Update totals to match actual line item sums
-    const actualTotal = Math.round((primaryQty * primaryRate + secondaryQty * secondaryRate) * 100) / 100;
-    if (actualTotal !== q.subtotal) {
-      await prisma.quote.update({
-        where: { id: quote.id },
-        data: { subtotal: actualTotal, total: actualTotal },
-      });
-    }
-
-    console.log(`Created/Updated quote: ${quote.quoteNumber} (${q.status})`);
-
-    // Create invoice for converted quote
-    if (q.status === 'converted') {
-      // BUG-024/026 fix: logical dates for converted invoice (issued after acceptance)
-      const convertedInvIssueDate = new Date(Date.now() - 20 * daysMs);
-      const convertedInvDueDate = new Date(Date.now() + 10 * daysMs);
-      const convertedInvSentAt = new Date(Date.now() - 18 * daysMs);
-
-      const invoice = await prisma.invoice.upsert({
-        where: {
-          workspaceId_invoiceNumber: {
-            workspaceId: workspace.id,
-            invoiceNumber: `INV-${String(i + 1).padStart(4, '0')}`,
-          },
-        },
-        update: {
-          status: 'sent',
-          title: `Invoice from ${q.title}`,
-          subtotal: q.subtotal,
-          total: q.subtotal,
-          amountDue: q.subtotal,
-          issueDate: convertedInvIssueDate,
-          dueDate: convertedInvDueDate,
-          sentAt: convertedInvSentAt,
-          deletedAt: null,
-        },
-        create: {
-          workspaceId: workspace.id,
-          clientId: client.id,
-          quoteId: quote.id,
-          invoiceNumber: `INV-${String(i + 1).padStart(4, '0')}`,
-          status: 'sent',
-          title: `Invoice from ${q.title}`,
-          issueDate: convertedInvIssueDate,
-          dueDate: convertedInvDueDate,
-          sentAt: convertedInvSentAt,
-          subtotal: q.subtotal,
-          total: q.subtotal,
-          amountDue: q.subtotal,
-        },
-      });
-
-      // Copy line items from quote to invoice (match the quote's split items)
-      await prisma.invoiceLineItem.deleteMany({ where: { invoiceId: invoice.id } });
-      const quoteLineItems = await prisma.quoteLineItem.findMany({
-        where: { quoteId: quote.id },
-        orderBy: { sortOrder: 'asc' },
-      });
-      for (const qli of quoteLineItems) {
-        await prisma.invoiceLineItem.create({
-          data: {
-            invoiceId: invoice.id,
-            name: qli.name,
-            description: qli.description,
-            quantity: qli.quantity,
-            rate: qli.rate,
-            amount: qli.amount,
-            sortOrder: qli.sortOrder,
-          },
-        });
-      }
-      // Update invoice totals to match actual quote line item totals
-      const invActualTotal = quoteLineItems.reduce((sum, li) => sum + Number(li.amount), 0);
-      await prisma.invoice.update({
-        where: { id: invoice.id },
-        data: { subtotal: invActualTotal, total: invActualTotal, amountDue: invActualTotal },
-      });
-
-      console.log(`Created/Updated invoice: ${invoice.invoiceNumber}`);
-    }
-  }
+        index: i,
+        quoteData: q,
+        clientId: createdClients[i % createdClients.length]!.id,
+        projectId: projectIds[i % projectIds.length]!,
+        dateCfg: quoteDateConfigs[i]!,
+      })
+    )
+  );
 
   // Create some additional invoices with different statuses and varied amounts
   // Note: amounts are derived from qty * rate to ensure math correctness (C01 fix)
@@ -560,171 +401,27 @@ async function main() {
     7: { issueDaysAgo: 55, sentDaysAgo: 53, viewedDaysAgo: 48, paidDaysAgo: 44, dueDaysAgo: 25 },                // INV-0014 paid
   };
 
-  for (let i = 0; i < testInvoices.length; i++) {
-    const inv = testInvoices[i]!;
-    const client = createdClients[i % createdClients.length]!;
-    const subtotal = inv.qty * inv.rate;
-    const invoiceNumber = `INV-${String(7 + i).padStart(4, '0')}`;
-    const invDates = invDateConfigs[i]!;
-    const daysMs = 24 * 60 * 60 * 1000;
-    const invProjectId = projectIds[i % projectIds.length]!;
-
-    const invIssueDate = new Date(Date.now() - invDates.issueDaysAgo * daysMs);
-    const invDueDate = invDates.dueDaysFromNow
-      ? new Date(Date.now() + invDates.dueDaysFromNow * daysMs)
-      : new Date(Date.now() - (invDates.dueDaysAgo ?? 0) * daysMs);
-    const invSentAt = invDates.sentDaysAgo ? new Date(Date.now() - invDates.sentDaysAgo * daysMs) : null;
-    const invViewedAt = invDates.viewedDaysAgo ? new Date(Date.now() - invDates.viewedDaysAgo * daysMs) : null;
-    const invPaidAt = invDates.paidDaysAgo ? new Date(Date.now() - invDates.paidDaysAgo * daysMs) : null;
-    const invVoidedAt = invDates.voidedDaysAgo ? new Date(Date.now() - invDates.voidedDaysAgo * daysMs) : null;
-    const invAccessToken = crypto.randomUUID();
-
-    const invoice = await prisma.invoice.upsert({
-      where: {
-        workspaceId_invoiceNumber: {
-          workspaceId: workspace.id,
-          invoiceNumber,
-        },
-      },
-      update: {
-        status: inv.status,
-        title: inv.title,
-        projectId: invProjectId,
-        subtotal,
-        total: subtotal,
-        amountPaid: inv.status === 'paid' ? subtotal : 0,
-        amountDue: (inv.status === 'paid' || inv.status === 'voided') ? 0 : subtotal,
-        issueDate: invIssueDate,
-        dueDate: invDueDate,
-        sentAt: invSentAt,
-        viewedAt: invViewedAt,
-        paidAt: invPaidAt,
-        voidedAt: invVoidedAt,
-        accessToken: invAccessToken,
-        deletedAt: null,
-      },
-      create: {
+  const actorId = users['test@oreko.dev']!.id;
+  await Promise.all(
+    testInvoices.map((inv, i) =>
+      seedTestInvoice({
         workspaceId: workspace.id,
-        clientId: client.id,
-        projectId: invProjectId,
-        invoiceNumber,
-        status: inv.status,
-        title: inv.title,
-        issueDate: invIssueDate,
-        dueDate: invDueDate,
-        subtotal,
-        total: subtotal,
-        amountPaid: inv.status === 'paid' ? subtotal : 0,
-        amountDue: (inv.status === 'paid' || inv.status === 'voided') ? 0 : subtotal,
-        sentAt: invSentAt,
-        viewedAt: invViewedAt,
-        paidAt: invPaidAt,
-        voidedAt: invVoidedAt,
-        accessToken: invAccessToken,
-      },
-    });
-
-    // C01 fix: amount is always qty * rate
-    await prisma.invoiceLineItem.upsert({
-      where: { id: `invoice-item-standalone-${invoice.id}` },
-      update: { name: inv.itemName, quantity: inv.qty, rate: inv.rate, amount: subtotal },
-      create: {
-        id: `invoice-item-standalone-${invoice.id}`,
-        invoiceId: invoice.id,
-        name: inv.itemName,
-        quantity: inv.qty,
-        rate: inv.rate,
-        amount: subtotal,
-      },
-    });
-
-    // Seed activity events for this invoice (H01 fix) - dates relative to actual invoice dates
-    const invoiceEvents: { eventType: string; createdAt: Date }[] = [];
-    invoiceEvents.push({ eventType: 'created', createdAt: invIssueDate });
-    if (invSentAt) {
-      invoiceEvents.push({ eventType: 'sent', createdAt: invSentAt });
-    }
-    if (invViewedAt) {
-      invoiceEvents.push({ eventType: 'viewed', createdAt: invViewedAt });
-    }
-    if (invPaidAt) {
-      invoiceEvents.push({ eventType: 'paid', createdAt: invPaidAt });
-    }
-    if (invVoidedAt) {
-      invoiceEvents.push({ eventType: 'voided', createdAt: invVoidedAt });
-    }
-
-    // Clear existing events and re-create
-    await prisma.invoiceEvent.deleteMany({ where: { invoiceId: invoice.id } });
-    for (const evt of invoiceEvents) {
-      await prisma.invoiceEvent.create({
-        data: {
-          invoiceId: invoice.id,
-          eventType: evt.eventType,
-          actorId: users['test@oreko.dev']!.id,
-          actorType: 'user',
-          metadata: {},
-          createdAt: evt.createdAt,
-        },
-      });
-    }
-
-    console.log(`Created/Updated invoice: ${invoice.invoiceNumber} (${inv.status})`);
-  }
+        index: i,
+        invoiceData: inv,
+        clientId: createdClients[i % createdClients.length]!.id,
+        projectId: projectIds[i % projectIds.length]!,
+        invDates: invDateConfigs[i]!,
+        actorId,
+      })
+    )
+  );
 
   // BUG-027 fix: Seed activity events for converted quote invoices
-  const convertedInvoices = await prisma.invoice.findMany({
-    where: { workspaceId: workspace.id, quoteId: { not: null } },
-  });
-  for (const cInvoice of convertedInvoices) {
-    await prisma.invoiceEvent.deleteMany({ where: { invoiceId: cInvoice.id } });
-
-    const cEvents: { eventType: string; createdAt: Date }[] = [];
-    cEvents.push({ eventType: 'created', createdAt: cInvoice.createdAt });
-    if (cInvoice.sentAt) cEvents.push({ eventType: 'sent', createdAt: cInvoice.sentAt });
-    if (cInvoice.viewedAt) cEvents.push({ eventType: 'viewed', createdAt: cInvoice.viewedAt });
-    if (cInvoice.paidAt) cEvents.push({ eventType: 'paid', createdAt: cInvoice.paidAt });
-
-    for (const evt of cEvents) {
-      await prisma.invoiceEvent.create({
-        data: {
-          invoiceId: cInvoice.id,
-          eventType: evt.eventType,
-          actorId: users['test@oreko.dev']!.id,
-          actorType: 'user',
-          metadata: {},
-          createdAt: evt.createdAt,
-        },
-      });
-    }
-  }
+  await seedConvertedInvoiceEvents(workspace.id, actorId);
   console.log('Seeded events for converted quote invoices');
 
   // Seed activity events for quotes (H01/H08 fix: force recreate with correct timestamps)
-  const allQuotes = await prisma.quote.findMany({ where: { workspaceId: workspace.id } });
-  for (const quote of allQuotes) {
-    await prisma.quoteEvent.deleteMany({ where: { quoteId: quote.id } });
-
-    const quoteEvents: { eventType: string; createdAt: Date }[] = [];
-    quoteEvents.push({ eventType: 'created', createdAt: quote.issueDate });
-    if (quote.sentAt) quoteEvents.push({ eventType: 'sent', createdAt: quote.sentAt });
-    if (quote.viewedAt) quoteEvents.push({ eventType: 'viewed', createdAt: quote.viewedAt });
-    if (quote.acceptedAt) quoteEvents.push({ eventType: 'accepted', createdAt: quote.acceptedAt });
-    if (quote.declinedAt) quoteEvents.push({ eventType: 'declined', createdAt: quote.declinedAt });
-
-    for (const evt of quoteEvents) {
-      await prisma.quoteEvent.create({
-        data: {
-          quoteId: quote.id,
-          eventType: evt.eventType,
-          actorId: users['test@oreko.dev']!.id,
-          actorType: 'user',
-          metadata: {},
-          createdAt: evt.createdAt,
-        },
-      });
-    }
-  }
+  await seedTestQuoteEvents(workspace.id, actorId);
   console.log('Seeded activity events for quotes and invoices');
 
   // Clean up stale notifications for test workspace
@@ -732,24 +429,7 @@ async function main() {
   console.log('Cleaned up stale notifications for test workspace');
 
   // Clean up any double-hyphen invoice/quote numbers for test workspace
-  const testDoubleHyphenInvoices = await prisma.invoice.findMany({
-    where: { workspaceId: workspace.id, invoiceNumber: { contains: '--' } },
-    select: { id: true, invoiceNumber: true },
-  });
-  for (const inv of testDoubleHyphenInvoices) {
-    const fixed = inv.invoiceNumber.replace(/--+/g, '-');
-    await prisma.invoice.update({ where: { id: inv.id }, data: { invoiceNumber: fixed } });
-    console.log(`Fixed test invoice number: ${inv.invoiceNumber} -> ${fixed}`);
-  }
-  const testDoubleHyphenQuotes = await prisma.quote.findMany({
-    where: { workspaceId: workspace.id, quoteNumber: { contains: '--' } },
-    select: { id: true, quoteNumber: true },
-  });
-  for (const q of testDoubleHyphenQuotes) {
-    const fixed = q.quoteNumber.replace(/--+/g, '-');
-    await prisma.quote.update({ where: { id: q.id }, data: { quoteNumber: fixed } });
-    console.log(`Fixed test quote number: ${q.quoteNumber} -> ${fixed}`);
-  }
+  await fixTestDoubleHyphenNumbers(workspace.id);
 
   // Update number sequences to match seeded data
   await prisma.numberSequence.update({
@@ -765,6 +445,452 @@ async function main() {
 
   // Seed demo workspace
   await seedDemoWorkspace();
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+interface TestQuoteData {
+  status: string;
+  title: string;
+  subtotal: number;
+  itemName: string;
+  qty: number;
+  rate: number;
+}
+
+interface TestQuoteDateConfig {
+  issueDaysAgo: number;
+  sentDaysAgo?: number;
+  viewedDaysAgo?: number;
+  acceptedDaysAgo?: number;
+  declinedDaysAgo?: number;
+}
+
+interface TestInvoiceData {
+  status: string;
+  title: string;
+  itemName: string;
+  qty: number;
+  rate: number;
+}
+
+interface TestInvoiceDateConfig {
+  issueDaysAgo: number;
+  sentDaysAgo?: number;
+  viewedDaysAgo?: number;
+  paidDaysAgo?: number;
+  voidedDaysAgo?: number;
+  dueDaysFromNow?: number;
+  dueDaysAgo?: number;
+}
+
+interface TestSeedEvent {
+  eventType: string;
+  createdAt: Date;
+}
+
+/** Helper: Date `days` days ago, or null when not set (or zero) */
+function daysAgoOrNull(days: number | undefined): Date | null {
+  return days ? new Date(Date.now() - days * DAY_MS) : null;
+}
+
+/** Helper: Build an ordered event list, skipping entries without a date */
+function buildTestEvents(entries: [string, Date | null][]): TestSeedEvent[] {
+  const events: TestSeedEvent[] = [];
+  for (const [eventType, createdAt] of entries) {
+    if (createdAt) {
+      events.push({ eventType, createdAt });
+    }
+  }
+  return events;
+}
+
+/** Helper: Create invoice activity events */
+async function createTestInvoiceEvents(invoiceId: string, events: TestSeedEvent[], actorId: string) {
+  await Promise.all(
+    events.map((evt) =>
+      prisma.invoiceEvent.create({
+        data: {
+          invoiceId,
+          eventType: evt.eventType,
+          actorId,
+          actorType: 'user',
+          metadata: {},
+          createdAt: evt.createdAt,
+        },
+      })
+    )
+  );
+}
+
+/** Helper: Seed a single test quote with line items (and invoice when converted) */
+async function seedTestQuote(params: {
+  workspaceId: string;
+  index: number;
+  quoteData: TestQuoteData;
+  clientId: string;
+  projectId: string;
+  dateCfg: TestQuoteDateConfig;
+}) {
+  const { workspaceId, index: i, quoteData: q, clientId, projectId, dateCfg } = params;
+  const quoteNumber = `Q-${String(i + 1).padStart(4, '0')}`;
+
+  const issueDate = new Date(Date.now() - dateCfg.issueDaysAgo * DAY_MS);
+  const expirationDate = new Date(issueDate.getTime() + 30 * DAY_MS);
+  const sentAt = daysAgoOrNull(dateCfg.sentDaysAgo);
+  const viewedAt = daysAgoOrNull(dateCfg.viewedDaysAgo);
+  const acceptedAt = daysAgoOrNull(dateCfg.acceptedDaysAgo);
+  const declinedAt = daysAgoOrNull(dateCfg.declinedDaysAgo);
+
+  const quote = await prisma.quote.upsert({
+    where: {
+      workspaceId_quoteNumber: {
+        workspaceId,
+        quoteNumber,
+      },
+    },
+    update: {
+      status: q.status,
+      title: q.title,
+      subtotal: q.subtotal,
+      total: q.subtotal,
+      projectId,
+      settings: {}, // C03 fix: clear stale blocks so fallback reconstructs from lineItems
+      issueDate,
+      expirationDate,
+      sentAt,
+      viewedAt,
+      acceptedAt,
+      declinedAt,
+      deletedAt: null,
+    },
+    create: {
+      workspaceId,
+      clientId,
+      projectId,
+      quoteNumber,
+      status: q.status,
+      title: q.title,
+      issueDate,
+      expirationDate,
+      subtotal: q.subtotal,
+      total: q.subtotal,
+      sentAt,
+      viewedAt,
+      acceptedAt,
+      declinedAt,
+    },
+  });
+
+  // Add line items (C03 fix: add multiple items per quote for realistic preview)
+  // Split the total into primary (70%) and secondary (30%) line items
+  const primaryAmount = Math.round(q.subtotal * 0.7 * 100) / 100;
+  const secondaryAmount = Math.round((q.subtotal - primaryAmount) * 100) / 100;
+  const primaryQty = Math.max(1, Math.round(q.qty * 0.7));
+  const secondaryQty = Math.max(1, q.qty - primaryQty);
+  const primaryRate = Math.round(primaryAmount / primaryQty * 100) / 100;
+  const secondaryRate = Math.round(secondaryAmount / secondaryQty * 100) / 100;
+
+  await prisma.quoteLineItem.upsert({
+    where: { id: `quote-item-${quote.id}` },
+    update: { name: q.itemName, quantity: primaryQty, rate: primaryRate, amount: Math.round(primaryQty * primaryRate * 100) / 100, sortOrder: 0 },
+    create: {
+      id: `quote-item-${quote.id}`,
+      quoteId: quote.id,
+      name: q.itemName,
+      quantity: primaryQty,
+      rate: primaryRate,
+      amount: Math.round(primaryQty * primaryRate * 100) / 100,
+      sortOrder: 0,
+    },
+  });
+  await prisma.quoteLineItem.upsert({
+    where: { id: `quote-item-2-${quote.id}` },
+    update: { name: 'Project Management', quantity: secondaryQty, rate: secondaryRate, amount: Math.round(secondaryQty * secondaryRate * 100) / 100, sortOrder: 1 },
+    create: {
+      id: `quote-item-2-${quote.id}`,
+      quoteId: quote.id,
+      name: 'Project Management',
+      quantity: secondaryQty,
+      rate: secondaryRate,
+      amount: Math.round(secondaryQty * secondaryRate * 100) / 100,
+      sortOrder: 1,
+    },
+  });
+
+  // Update totals to match actual line item sums
+  const actualTotal = Math.round((primaryQty * primaryRate + secondaryQty * secondaryRate) * 100) / 100;
+  if (actualTotal !== q.subtotal) {
+    await prisma.quote.update({
+      where: { id: quote.id },
+      data: { subtotal: actualTotal, total: actualTotal },
+    });
+  }
+
+  console.log(`Created/Updated quote: ${quote.quoteNumber} (${q.status})`);
+
+  // Create invoice for converted quote
+  if (q.status === 'converted') {
+    await seedTestInvoiceFromQuote({ workspaceId, clientId, quoteId: quote.id, index: i, quoteData: q });
+  }
+}
+
+/** Helper: Create the invoice for a converted test quote */
+async function seedTestInvoiceFromQuote(params: {
+  workspaceId: string;
+  clientId: string;
+  quoteId: string;
+  index: number;
+  quoteData: TestQuoteData;
+}) {
+  const { workspaceId, clientId, quoteId, index: i, quoteData: q } = params;
+  const invoiceNumber = `INV-${String(i + 1).padStart(4, '0')}`;
+
+  // BUG-024/026 fix: logical dates for converted invoice (issued after acceptance)
+  const convertedInvIssueDate = new Date(Date.now() - 20 * DAY_MS);
+  const convertedInvDueDate = new Date(Date.now() + 10 * DAY_MS);
+  const convertedInvSentAt = new Date(Date.now() - 18 * DAY_MS);
+
+  const invoice = await prisma.invoice.upsert({
+    where: {
+      workspaceId_invoiceNumber: {
+        workspaceId,
+        invoiceNumber,
+      },
+    },
+    update: {
+      status: 'sent',
+      title: `Invoice from ${q.title}`,
+      subtotal: q.subtotal,
+      total: q.subtotal,
+      amountDue: q.subtotal,
+      issueDate: convertedInvIssueDate,
+      dueDate: convertedInvDueDate,
+      sentAt: convertedInvSentAt,
+      deletedAt: null,
+    },
+    create: {
+      workspaceId,
+      clientId,
+      quoteId,
+      invoiceNumber,
+      status: 'sent',
+      title: `Invoice from ${q.title}`,
+      issueDate: convertedInvIssueDate,
+      dueDate: convertedInvDueDate,
+      sentAt: convertedInvSentAt,
+      subtotal: q.subtotal,
+      total: q.subtotal,
+      amountDue: q.subtotal,
+    },
+  });
+
+  // Copy line items from quote to invoice (match the quote's split items)
+  await prisma.invoiceLineItem.deleteMany({ where: { invoiceId: invoice.id } });
+  const quoteLineItems = await prisma.quoteLineItem.findMany({
+    where: { quoteId },
+    orderBy: { sortOrder: 'asc' },
+  });
+  await Promise.all(
+    quoteLineItems.map((qli) =>
+      prisma.invoiceLineItem.create({
+        data: {
+          invoiceId: invoice.id,
+          name: qli.name,
+          description: qli.description,
+          quantity: qli.quantity,
+          rate: qli.rate,
+          amount: qli.amount,
+          sortOrder: qli.sortOrder,
+        },
+      })
+    )
+  );
+  // Update invoice totals to match actual quote line item totals
+  const invActualTotal = quoteLineItems.reduce((sum, li) => sum + Number(li.amount), 0);
+  await prisma.invoice.update({
+    where: { id: invoice.id },
+    data: { subtotal: invActualTotal, total: invActualTotal, amountDue: invActualTotal },
+  });
+
+  console.log(`Created/Updated invoice: ${invoice.invoiceNumber}`);
+}
+
+/** Helper: Seed a single standalone test invoice with line item and events */
+async function seedTestInvoice(params: {
+  workspaceId: string;
+  index: number;
+  invoiceData: TestInvoiceData;
+  clientId: string;
+  projectId: string;
+  invDates: TestInvoiceDateConfig;
+  actorId: string;
+}) {
+  const { workspaceId, index: i, invoiceData: inv, clientId, projectId, invDates, actorId } = params;
+  const subtotal = inv.qty * inv.rate;
+  const invoiceNumber = `INV-${String(7 + i).padStart(4, '0')}`;
+
+  const invIssueDate = new Date(Date.now() - invDates.issueDaysAgo * DAY_MS);
+  const invDueDate = invDates.dueDaysFromNow
+    ? new Date(Date.now() + invDates.dueDaysFromNow * DAY_MS)
+    : new Date(Date.now() - (invDates.dueDaysAgo ?? 0) * DAY_MS);
+  const invSentAt = daysAgoOrNull(invDates.sentDaysAgo);
+  const invViewedAt = daysAgoOrNull(invDates.viewedDaysAgo);
+  const invPaidAt = daysAgoOrNull(invDates.paidDaysAgo);
+  const invVoidedAt = daysAgoOrNull(invDates.voidedDaysAgo);
+  const invAccessToken = crypto.randomUUID();
+  const amountPaid = inv.status === 'paid' ? subtotal : 0;
+  const amountDue = (inv.status === 'paid' || inv.status === 'voided') ? 0 : subtotal;
+
+  const invoice = await prisma.invoice.upsert({
+    where: {
+      workspaceId_invoiceNumber: {
+        workspaceId,
+        invoiceNumber,
+      },
+    },
+    update: {
+      status: inv.status,
+      title: inv.title,
+      projectId,
+      subtotal,
+      total: subtotal,
+      amountPaid,
+      amountDue,
+      issueDate: invIssueDate,
+      dueDate: invDueDate,
+      sentAt: invSentAt,
+      viewedAt: invViewedAt,
+      paidAt: invPaidAt,
+      voidedAt: invVoidedAt,
+      accessToken: invAccessToken,
+      deletedAt: null,
+    },
+    create: {
+      workspaceId,
+      clientId,
+      projectId,
+      invoiceNumber,
+      status: inv.status,
+      title: inv.title,
+      issueDate: invIssueDate,
+      dueDate: invDueDate,
+      subtotal,
+      total: subtotal,
+      amountPaid,
+      amountDue,
+      sentAt: invSentAt,
+      viewedAt: invViewedAt,
+      paidAt: invPaidAt,
+      voidedAt: invVoidedAt,
+      accessToken: invAccessToken,
+    },
+  });
+
+  // C01 fix: amount is always qty * rate
+  await prisma.invoiceLineItem.upsert({
+    where: { id: `invoice-item-standalone-${invoice.id}` },
+    update: { name: inv.itemName, quantity: inv.qty, rate: inv.rate, amount: subtotal },
+    create: {
+      id: `invoice-item-standalone-${invoice.id}`,
+      invoiceId: invoice.id,
+      name: inv.itemName,
+      quantity: inv.qty,
+      rate: inv.rate,
+      amount: subtotal,
+    },
+  });
+
+  // Seed activity events for this invoice (H01 fix) - dates relative to actual invoice dates
+  const invoiceEvents = buildTestEvents([
+    ['created', invIssueDate],
+    ['sent', invSentAt],
+    ['viewed', invViewedAt],
+    ['paid', invPaidAt],
+    ['voided', invVoidedAt],
+  ]);
+
+  // Clear existing events and re-create
+  await prisma.invoiceEvent.deleteMany({ where: { invoiceId: invoice.id } });
+  await createTestInvoiceEvents(invoice.id, invoiceEvents, actorId);
+
+  console.log(`Created/Updated invoice: ${invoice.invoiceNumber} (${inv.status})`);
+}
+
+/** Helper: Recreate activity events for invoices converted from quotes */
+async function seedConvertedInvoiceEvents(workspaceId: string, actorId: string) {
+  const convertedInvoices = await prisma.invoice.findMany({
+    where: { workspaceId, quoteId: { not: null } },
+  });
+  await Promise.all(
+    convertedInvoices.map(async (cInvoice) => {
+      await prisma.invoiceEvent.deleteMany({ where: { invoiceId: cInvoice.id } });
+      const cEvents = buildTestEvents([
+        ['created', cInvoice.createdAt],
+        ['sent', cInvoice.sentAt],
+        ['viewed', cInvoice.viewedAt],
+        ['paid', cInvoice.paidAt],
+      ]);
+      await createTestInvoiceEvents(cInvoice.id, cEvents, actorId);
+    })
+  );
+}
+
+/** Helper: Recreate activity events for all quotes in a workspace */
+async function seedTestQuoteEvents(workspaceId: string, actorId: string) {
+  const allQuotes = await prisma.quote.findMany({ where: { workspaceId } });
+  await Promise.all(
+    allQuotes.map(async (quote) => {
+      await prisma.quoteEvent.deleteMany({ where: { quoteId: quote.id } });
+      const quoteEvents = buildTestEvents([
+        ['created', quote.issueDate],
+        ['sent', quote.sentAt],
+        ['viewed', quote.viewedAt],
+        ['accepted', quote.acceptedAt],
+        ['declined', quote.declinedAt],
+      ]);
+      await Promise.all(
+        quoteEvents.map((evt) =>
+          prisma.quoteEvent.create({
+            data: {
+              quoteId: quote.id,
+              eventType: evt.eventType,
+              actorId,
+              actorType: 'user',
+              metadata: {},
+              createdAt: evt.createdAt,
+            },
+          })
+        )
+      );
+    })
+  );
+}
+
+/** Helper: Replace repeated hyphens in invoice/quote numbers for a workspace */
+async function fixTestDoubleHyphenNumbers(workspaceId: string) {
+  const testDoubleHyphenInvoices = await prisma.invoice.findMany({
+    where: { workspaceId, invoiceNumber: { contains: '--' } },
+    select: { id: true, invoiceNumber: true },
+  });
+  await Promise.all(
+    testDoubleHyphenInvoices.map(async (inv) => {
+      const fixed = inv.invoiceNumber.replaceAll(/--+/g, '-');
+      await prisma.invoice.update({ where: { id: inv.id }, data: { invoiceNumber: fixed } });
+      console.log(`Fixed test invoice number: ${inv.invoiceNumber} -> ${fixed}`);
+    })
+  );
+  const testDoubleHyphenQuotes = await prisma.quote.findMany({
+    where: { workspaceId, quoteNumber: { contains: '--' } },
+    select: { id: true, quoteNumber: true },
+  });
+  await Promise.all(
+    testDoubleHyphenQuotes.map(async (q) => {
+      const fixed = q.quoteNumber.replaceAll(/--+/g, '-');
+      await prisma.quote.update({ where: { id: q.id }, data: { quoteNumber: fixed } });
+      console.log(`Fixed test quote number: ${q.quoteNumber} -> ${fixed}`);
+    })
+  );
 }
 
 /** Helper: Generate realistic multi-item line items for demo quotes */
@@ -811,6 +937,198 @@ function getDemoQuoteLineItems(title: string, subtotal: number) {
     { name: 'Design Services', description: 'Visual design and prototyping', qty: primaryQty, rate: primaryRate },
     { name: 'Project Management', description: 'Coordination and delivery', qty: secondaryQty, rate: secondaryRate },
   ];
+}
+
+/** Helper: Recreate demo quote line items and sync quote totals with them */
+async function replaceDemoQuoteLineItems(quoteId: string, title: string, subtotal: number) {
+  // Clear existing line items and recreate with proper math
+  await prisma.quoteLineItem.deleteMany({ where: { quoteId } });
+  const demoLineItems = getDemoQuoteLineItems(title, subtotal);
+  const lineItemTotal = demoLineItems.reduce((sum, item) => sum + item.qty * item.rate, 0);
+  await Promise.all(
+    demoLineItems.map((item, li) =>
+      prisma.quoteLineItem.create({
+        data: {
+          quoteId,
+          name: item.name,
+          description: item.description,
+          quantity: item.qty,
+          rate: item.rate,
+          amount: item.qty * item.rate,
+          sortOrder: li,
+        },
+      })
+    )
+  );
+  // Update quote totals to match actual line items
+  if (lineItemTotal !== subtotal) {
+    await prisma.quote.update({
+      where: { id: quoteId },
+      data: { subtotal: lineItemTotal, total: lineItemTotal },
+    });
+  }
+}
+
+interface DemoInvoiceLineItemSource {
+  title: string;
+  status: string;
+  subtotal: number;
+  amountPaid: number;
+}
+
+/** Helper: Recreate demo invoice line items and sync invoice totals with them */
+async function replaceDemoInvoiceLineItems(
+  invoiceId: string,
+  invoiceData: DemoInvoiceLineItemSource
+) {
+  await prisma.invoiceLineItem.deleteMany({ where: { invoiceId } });
+  // Split into 2 items for realism
+  const invPrimaryRate = 150;
+  const invPrimaryQty = Math.max(1, Math.round((invoiceData.subtotal * 0.65) / invPrimaryRate));
+  const invPrimaryAmt = invPrimaryQty * invPrimaryRate;
+  const invSecondaryAmt = invoiceData.subtotal - invPrimaryAmt;
+  const invSecondaryRate = 100;
+  const invSecondaryQty = Math.max(1, Math.round(invSecondaryAmt / invSecondaryRate));
+  const invActualSecondaryAmt = invSecondaryQty * invSecondaryRate;
+
+  await prisma.invoiceLineItem.create({
+    data: {
+      invoiceId,
+      name: invoiceData.title.includes('Design') ? 'Design Services' : 'Professional Services',
+      quantity: invPrimaryQty,
+      rate: invPrimaryRate,
+      amount: invPrimaryAmt,
+      sortOrder: 0,
+    },
+  });
+  if (invActualSecondaryAmt > 0) {
+    await prisma.invoiceLineItem.create({
+      data: {
+        invoiceId,
+        name: 'Project Coordination',
+        quantity: invSecondaryQty,
+        rate: invSecondaryRate,
+        amount: invActualSecondaryAmt,
+        sortOrder: 1,
+      },
+    });
+  }
+  // Update totals to match actual line items
+  const invActualTotal = invPrimaryAmt + invActualSecondaryAmt;
+  if (invActualTotal === invoiceData.subtotal) return;
+  const isPaid = invoiceData.status === 'paid';
+  await prisma.invoice.update({
+    where: { id: invoiceId },
+    data: {
+      subtotal: invActualTotal,
+      total: invActualTotal,
+      amountPaid: isPaid ? invActualTotal : invoiceData.amountPaid,
+      amountDue: isPaid ? 0 : invActualTotal,
+    },
+  });
+}
+
+type DemoEvent = { eventType: string; createdAt: Date };
+
+/** Helper: Build the list of timeline events from optional timestamps */
+function buildDemoEvents(
+  issueDate: Date,
+  timestamps: [eventType: string, createdAt: Date | null][]
+): DemoEvent[] {
+  const events: DemoEvent[] = [{ eventType: 'created', createdAt: issueDate }];
+  for (const [eventType, createdAt] of timestamps) {
+    if (createdAt) events.push({ eventType, createdAt });
+  }
+  return events;
+}
+
+/** Helper: Recreate activity events for all demo quotes */
+async function seedDemoQuoteEvents(workspaceId: string, actorId: string) {
+  const allDemoQuotes = await prisma.quote.findMany({ where: { workspaceId } });
+  await Promise.all(
+    allDemoQuotes.map(async (quote) => {
+      await prisma.quoteEvent.deleteMany({ where: { quoteId: quote.id } });
+
+      const events = buildDemoEvents(quote.issueDate, [
+        ['sent', quote.sentAt],
+        ['viewed', quote.viewedAt],
+        ['accepted', quote.acceptedAt],
+        ['declined', quote.declinedAt],
+      ]);
+
+      await Promise.all(
+        events.map((evt) =>
+          prisma.quoteEvent.create({
+            data: {
+              quoteId: quote.id,
+              eventType: evt.eventType,
+              actorId,
+              actorType: 'user',
+              metadata: {},
+              createdAt: evt.createdAt,
+            },
+          })
+        )
+      );
+    })
+  );
+}
+
+/** Helper: Recreate activity events for all demo invoices */
+async function seedDemoInvoiceEvents(workspaceId: string, actorId: string) {
+  const allDemoInvoices = await prisma.invoice.findMany({ where: { workspaceId } });
+  await Promise.all(
+    allDemoInvoices.map(async (invoice) => {
+      await prisma.invoiceEvent.deleteMany({ where: { invoiceId: invoice.id } });
+
+      const events = buildDemoEvents(invoice.issueDate, [
+        ['sent', invoice.sentAt],
+        ['viewed', invoice.viewedAt],
+        ['paid', invoice.paidAt],
+      ]);
+
+      await Promise.all(
+        events.map((evt) =>
+          prisma.invoiceEvent.create({
+            data: {
+              invoiceId: invoice.id,
+              eventType: evt.eventType,
+              actorId,
+              actorType: 'user',
+              metadata: {},
+              createdAt: evt.createdAt,
+            },
+          })
+        )
+      );
+    })
+  );
+}
+
+/** Helper: Fix double-hyphen invoice/quote numbers in the demo workspace */
+async function fixDemoDoubleHyphenNumbers(workspaceId: string) {
+  const doubleHyphenInvoices = await prisma.invoice.findMany({
+    where: { workspaceId, invoiceNumber: { contains: '--' } },
+    select: { id: true, invoiceNumber: true },
+  });
+  await Promise.all(
+    doubleHyphenInvoices.map(async (inv) => {
+      const fixed = inv.invoiceNumber.replaceAll(/--+/g, '-');
+      await prisma.invoice.update({ where: { id: inv.id }, data: { invoiceNumber: fixed } });
+      console.log(`Fixed invoice number: ${inv.invoiceNumber} -> ${fixed}`);
+    })
+  );
+  const doubleHyphenQuotes = await prisma.quote.findMany({
+    where: { workspaceId, quoteNumber: { contains: '--' } },
+    select: { id: true, quoteNumber: true },
+  });
+  await Promise.all(
+    doubleHyphenQuotes.map(async (q) => {
+      const fixed = q.quoteNumber.replaceAll(/--+/g, '-');
+      await prisma.quote.update({ where: { id: q.id }, data: { quoteNumber: fixed } });
+      console.log(`Fixed quote number: ${q.quoteNumber} -> ${fixed}`);
+    })
+  );
 }
 
 /**
@@ -1153,74 +1471,50 @@ async function seedDemoWorkspace() {
   ];
 
   const demoQuoteIds: Record<string, string> = {};
-  for (const quoteData of demoQuotes) {
-    const quote = await prisma.quote.upsert({
-      where: {
-        workspaceId_quoteNumber: {
+  await Promise.all(
+    demoQuotes.map(async (quoteData) => {
+      const quote = await prisma.quote.upsert({
+        where: {
+          workspaceId_quoteNumber: {
+            workspaceId: demoWorkspace.id,
+            quoteNumber: quoteData.quoteNumber,
+          },
+        },
+        update: {
+          status: quoteData.status,
+          title: quoteData.title,
+          subtotal: quoteData.subtotal,
+          total: quoteData.total,
+          settings: {}, // C03 fix: clear stale blocks
+          sentAt: quoteData.sentAt ?? null,
+          viewedAt: quoteData.viewedAt ?? null,
+          acceptedAt: quoteData.acceptedAt ?? null,
+          declinedAt: quoteData.declinedAt ?? null,
+          deletedAt: null,
+        },
+        create: {
+          id: quoteData.id,
           workspaceId: demoWorkspace.id,
+          clientId: quoteData.clientId,
           quoteNumber: quoteData.quoteNumber,
+          title: quoteData.title,
+          status: quoteData.status,
+          issueDate: quoteData.issueDate,
+          expirationDate: quoteData.expirationDate,
+          sentAt: quoteData.sentAt,
+          viewedAt: quoteData.viewedAt,
+          acceptedAt: quoteData.acceptedAt,
+          declinedAt: quoteData.declinedAt,
+          subtotal: quoteData.subtotal,
+          total: quoteData.total,
         },
-      },
-      update: {
-        status: quoteData.status,
-        title: quoteData.title,
-        subtotal: quoteData.subtotal,
-        total: quoteData.total,
-        settings: {}, // C03 fix: clear stale blocks
-        sentAt: quoteData.sentAt ?? null,
-        viewedAt: quoteData.viewedAt ?? null,
-        acceptedAt: quoteData.acceptedAt ?? null,
-        declinedAt: quoteData.declinedAt ?? null,
-        deletedAt: null,
-      },
-      create: {
-        id: quoteData.id,
-        workspaceId: demoWorkspace.id,
-        clientId: quoteData.clientId,
-        quoteNumber: quoteData.quoteNumber,
-        title: quoteData.title,
-        status: quoteData.status,
-        issueDate: quoteData.issueDate,
-        expirationDate: quoteData.expirationDate,
-        sentAt: quoteData.sentAt,
-        viewedAt: quoteData.viewedAt,
-        acceptedAt: quoteData.acceptedAt,
-        declinedAt: quoteData.declinedAt,
-        subtotal: quoteData.subtotal,
-        total: quoteData.total,
-      },
-    });
-    demoQuoteIds[quoteData.id] = quote.id;
+      });
+      demoQuoteIds[quoteData.id] = quote.id;
 
-    // C03 fix: Add multiple realistic line items per quote
-    // Clear existing line items and recreate with proper math
-    await prisma.quoteLineItem.deleteMany({ where: { quoteId: quote.id } });
-    const demoLineItems = getDemoQuoteLineItems(quoteData.title, quoteData.subtotal);
-    let lineItemTotal = 0;
-    for (let li = 0; li < demoLineItems.length; li++) {
-      const item = demoLineItems[li]!;
-      const amount = item.qty * item.rate;
-      lineItemTotal += amount;
-      await prisma.quoteLineItem.create({
-        data: {
-          quoteId: quote.id,
-          name: item.name,
-          description: item.description,
-          quantity: item.qty,
-          rate: item.rate,
-          amount,
-          sortOrder: li,
-        },
-      });
-    }
-    // Update quote totals to match actual line items
-    if (lineItemTotal !== quoteData.subtotal) {
-      await prisma.quote.update({
-        where: { id: quote.id },
-        data: { subtotal: lineItemTotal, total: lineItemTotal },
-      });
-    }
-  }
+      // C03 fix: Add multiple realistic line items per quote
+      await replaceDemoQuoteLineItems(quote.id, quoteData.title, quoteData.subtotal);
+    })
+  );
   console.log('Created/Updated demo quotes');
 
   // Create demo invoices
@@ -1383,93 +1677,51 @@ async function seedDemoWorkspace() {
     console.log('Created/Updated converted quote invoice: INV-0008');
   }
 
-  for (const invoiceData of demoInvoices) {
-    const invoice = await prisma.invoice.upsert({
-      where: {
-        workspaceId_invoiceNumber: {
+  await Promise.all(
+    demoInvoices.map(async (invoiceData) => {
+      const invoice = await prisma.invoice.upsert({
+        where: {
+          workspaceId_invoiceNumber: {
+            workspaceId: demoWorkspace.id,
+            invoiceNumber: invoiceData.invoiceNumber,
+          },
+        },
+        update: {
+          status: invoiceData.status,
+          title: invoiceData.title,
+          subtotal: invoiceData.subtotal,
+          total: invoiceData.total,
+          amountPaid: invoiceData.amountPaid,
+          amountDue: invoiceData.amountDue,
+          sentAt: invoiceData.sentAt ?? null,
+          viewedAt: invoiceData.viewedAt ?? null,
+          paidAt: invoiceData.paidAt ?? null,
+          deletedAt: null,
+        },
+        create: {
+          id: invoiceData.id,
           workspaceId: demoWorkspace.id,
+          clientId: invoiceData.clientId,
           invoiceNumber: invoiceData.invoiceNumber,
-        },
-      },
-      update: {
-        status: invoiceData.status,
-        title: invoiceData.title,
-        subtotal: invoiceData.subtotal,
-        total: invoiceData.total,
-        amountPaid: invoiceData.amountPaid,
-        amountDue: invoiceData.amountDue,
-        sentAt: invoiceData.sentAt ?? null,
-        viewedAt: invoiceData.viewedAt ?? null,
-        paidAt: invoiceData.paidAt ?? null,
-        deletedAt: null,
-      },
-      create: {
-        id: invoiceData.id,
-        workspaceId: demoWorkspace.id,
-        clientId: invoiceData.clientId,
-        invoiceNumber: invoiceData.invoiceNumber,
-        title: invoiceData.title,
-        status: invoiceData.status,
-        issueDate: invoiceData.issueDate,
-        dueDate: invoiceData.dueDate,
-        sentAt: invoiceData.sentAt,
-        viewedAt: invoiceData.viewedAt,
-        paidAt: invoiceData.paidAt,
-        subtotal: invoiceData.subtotal,
-        total: invoiceData.total,
-        amountPaid: invoiceData.amountPaid,
-        amountDue: invoiceData.amountDue,
-      },
-    });
-    demoInvoiceIds[invoiceData.id] = invoice.id;
-
-    // C01 fix: recreate line items with correct math
-    await prisma.invoiceLineItem.deleteMany({ where: { invoiceId: invoice.id } });
-    // Split into 2 items for realism
-    const invPrimaryRate = 150;
-    const invPrimaryQty = Math.max(1, Math.round((invoiceData.subtotal * 0.65) / invPrimaryRate));
-    const invPrimaryAmt = invPrimaryQty * invPrimaryRate;
-    const invSecondaryAmt = invoiceData.subtotal - invPrimaryAmt;
-    const invSecondaryRate = 100;
-    const invSecondaryQty = Math.max(1, Math.round(invSecondaryAmt / invSecondaryRate));
-    const invActualSecondaryAmt = invSecondaryQty * invSecondaryRate;
-
-    await prisma.invoiceLineItem.create({
-      data: {
-        invoiceId: invoice.id,
-        name: invoiceData.title.includes('Design') ? 'Design Services' : 'Professional Services',
-        quantity: invPrimaryQty,
-        rate: invPrimaryRate,
-        amount: invPrimaryAmt,
-        sortOrder: 0,
-      },
-    });
-    if (invActualSecondaryAmt > 0) {
-      await prisma.invoiceLineItem.create({
-        data: {
-          invoiceId: invoice.id,
-          name: 'Project Coordination',
-          quantity: invSecondaryQty,
-          rate: invSecondaryRate,
-          amount: invActualSecondaryAmt,
-          sortOrder: 1,
+          title: invoiceData.title,
+          status: invoiceData.status,
+          issueDate: invoiceData.issueDate,
+          dueDate: invoiceData.dueDate,
+          sentAt: invoiceData.sentAt,
+          viewedAt: invoiceData.viewedAt,
+          paidAt: invoiceData.paidAt,
+          subtotal: invoiceData.subtotal,
+          total: invoiceData.total,
+          amountPaid: invoiceData.amountPaid,
+          amountDue: invoiceData.amountDue,
         },
       });
-    }
-    // Update totals to match actual line items
-    const invActualTotal = invPrimaryAmt + invActualSecondaryAmt;
-    if (invActualTotal !== invoiceData.subtotal) {
-      await prisma.invoice.update({
-        where: { id: invoice.id },
-        data: {
-          subtotal: invActualTotal,
-          total: invActualTotal,
-          amountPaid: invoiceData.status === 'paid' ? invActualTotal : invoiceData.amountPaid,
-          amountDue: invoiceData.status === 'paid' ? 0 : invActualTotal,
-        },
-      });
-    }
-  }
+      demoInvoiceIds[invoiceData.id] = invoice.id;
+
+      // C01 fix: recreate line items with correct math
+      await replaceDemoInvoiceLineItems(invoice.id, invoiceData);
+    })
+  );
   console.log('Created/Updated demo invoices');
 
   // Create demo projects
@@ -1565,76 +1817,14 @@ async function seedDemoWorkspace() {
   console.log('Linked invoices to projects');
 
   // Seed activity events for demo quotes (H01/H03/H08 fix: force recreate with correct timestamps)
-  const allDemoQuotes = await prisma.quote.findMany({ where: { workspaceId: demoWorkspace.id } });
-  for (const quote of allDemoQuotes) {
-    await prisma.quoteEvent.deleteMany({ where: { quoteId: quote.id } });
-
-    const events: { eventType: string; createdAt: Date }[] = [];
-    events.push({ eventType: 'created', createdAt: quote.issueDate });
-    if (quote.sentAt) events.push({ eventType: 'sent', createdAt: quote.sentAt });
-    if (quote.viewedAt) events.push({ eventType: 'viewed', createdAt: quote.viewedAt });
-    if (quote.acceptedAt) events.push({ eventType: 'accepted', createdAt: quote.acceptedAt });
-    if (quote.declinedAt) events.push({ eventType: 'declined', createdAt: quote.declinedAt });
-
-    for (const evt of events) {
-      await prisma.quoteEvent.create({
-        data: {
-          quoteId: quote.id,
-          eventType: evt.eventType,
-          actorId: demoUser.id,
-          actorType: 'user',
-          metadata: {},
-          createdAt: evt.createdAt,
-        },
-      });
-    }
-  }
+  await seedDemoQuoteEvents(demoWorkspace.id, demoUser.id);
 
   // Seed activity events for demo invoices (H01/H03 fix: force recreate)
-  const allDemoInvoices = await prisma.invoice.findMany({ where: { workspaceId: demoWorkspace.id } });
-  for (const invoice of allDemoInvoices) {
-    await prisma.invoiceEvent.deleteMany({ where: { invoiceId: invoice.id } });
-
-    const events: { eventType: string; createdAt: Date }[] = [];
-    events.push({ eventType: 'created', createdAt: invoice.issueDate });
-    if (invoice.sentAt) events.push({ eventType: 'sent', createdAt: invoice.sentAt });
-    if (invoice.viewedAt) events.push({ eventType: 'viewed', createdAt: invoice.viewedAt });
-    if (invoice.paidAt) events.push({ eventType: 'paid', createdAt: invoice.paidAt });
-
-    for (const evt of events) {
-      await prisma.invoiceEvent.create({
-        data: {
-          invoiceId: invoice.id,
-          eventType: evt.eventType,
-          actorId: demoUser.id,
-          actorType: 'user',
-          metadata: {},
-          createdAt: evt.createdAt,
-        },
-      });
-    }
-  }
+  await seedDemoInvoiceEvents(demoWorkspace.id, demoUser.id);
   console.log('Seeded demo activity events');
 
   // Clean up any double-hyphen invoice/quote numbers (fixes data created before prefix-strip fix)
-  const doubleHyphenInvoices = await prisma.invoice.findMany({
-    where: { workspaceId: demoWorkspace.id, invoiceNumber: { contains: '--' } },
-    select: { id: true, invoiceNumber: true },
-  });
-  for (const inv of doubleHyphenInvoices) {
-    const fixed = inv.invoiceNumber.replace(/--+/g, '-');
-    await prisma.invoice.update({ where: { id: inv.id }, data: { invoiceNumber: fixed } });
-    console.log(`Fixed invoice number: ${inv.invoiceNumber} -> ${fixed}`);
-  }
-  const doubleHyphenQuotes = await prisma.quote.findMany({
-    where: { workspaceId: demoWorkspace.id, quoteNumber: { contains: '--' } },
-    select: { id: true, quoteNumber: true },
-  });
-  for (const q of doubleHyphenQuotes) {
-    const fixed = q.quoteNumber.replace(/--+/g, '-');
-    await prisma.quote.update({ where: { id: q.id }, data: { quoteNumber: fixed } });
-    console.log(`Fixed quote number: ${q.quoteNumber} -> ${fixed}`);
-  }
+  await fixDemoDoubleHyphenNumbers(demoWorkspace.id);
 
   console.log('Demo workspace seeding completed!');
 }
