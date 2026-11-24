@@ -413,7 +413,7 @@ export function EditInvoiceForm({
       return Number.parseFloat(customTaxRate) || 0;
     }
     const match = taxRate.match(/^(\d+(?:\.\d+)?)/);
-    return match?.[1] ? parseFloat(match[1]) : 0;
+    return match?.[1] ? Number.parseFloat(match[1]) : 0;
   }, [taxRate, customTaxRate]);
 
   const discountAmount = calculateDiscountAmount(subtotal, discount, discountType);
