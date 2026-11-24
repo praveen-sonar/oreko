@@ -14,7 +14,7 @@ interface PageProps {
 async function ContractTemplateContent({ searchParams }: { searchParams: { search?: string; page?: string } }) {
   const { data: templates } = await getContractTemplates({
     search: searchParams.search,
-    page: searchParams.page ? parseInt(searchParams.page, 10) : 1,
+    page: searchParams.page ? Number.parseInt(searchParams.page, 10) : 1,
     isTemplate: true,
   });
 

@@ -51,7 +51,7 @@ async function ClientListWrapper({
   const clients = await getClients({
     search: searchParams.search,
     type: searchParams.type as 'individual' | 'company' | undefined,
-    page: searchParams.page ? parseInt(searchParams.page) : 1,
+    page: searchParams.page ? Number.parseInt(searchParams.page) : 1,
     sortBy: searchParams.sortBy,
     sortOrder: (searchParams.sortOrder as 'asc' | 'desc') || 'desc',
   });
