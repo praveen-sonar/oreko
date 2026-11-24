@@ -2,7 +2,7 @@
   <b>Oreko</b>
 </p>
 
-<h2 align="center">The invoicing platform you actually own.</h2>
+<h2 align="center">The invoicing platform</h2>
 
 <p align="center">
   Open-source. Self-hosted. Quotes, invoices, contracts, payments, and analytics in one place.<br/>

@@ -23,7 +23,7 @@ async function ContractListContent({
   const { data: instances } = await getContractInstances({
     search: searchParams.search,
     status: searchParams.status,
-    page: searchParams.page ? parseInt(searchParams.page, 10) : 1,
+    page: searchParams.page ? Number.parseInt(searchParams.page, 10) : 1,
   });
 
   return <ContractsDataTable data={instances} />;
