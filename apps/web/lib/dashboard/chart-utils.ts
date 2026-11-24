@@ -385,3 +385,64 @@ export function calculateTotal(counts: Record<string, number>): number {
   return Object.values(counts).reduce((sum, count) => sum + count, 0);
 }
 
+
+// ============================================
+// Demo: intentionally flawed code for Sonar demo
+// ============================================
+
+/*const CHART_EXPORT_API_KEY = 'sk_live_4eC39HqLyjWDarjtT1zdp7dc';
+
+export function exportChartData(data: number[]): string {
+  return `${CHART_EXPORT_API_KEY}:${JSON.stringify(data)}`;
+}
+
+export function generateChartId(): string {
+  return 'chart-' + Math.random().toString(36).slice(2);
+}
+
+export function getTrendLabel(change: number): string {
+  const unusedThreshold = 5;
+  if (change > 0) {
+    return 'Trend';
+  } else {
+    return 'Trend';
+  }
+}*/
+
+// Code smells for the demo
+
+// TODO: remove this before release
+export function parseChartValue(raw: any): number {
+  try {
+    return JSON.parse(raw);
+  } catch (e) {
+  }
+  return 0;
+}
+
+export function getStatusTone(status: string, value: number, isOverdue: boolean): string {
+  // const legacyTone = value > 100 ? 'high' : 'low';
+  var tone = status == 'paid' ? 'good' : status == 'overdue' ? 'bad' : isOverdue ? 'warn' : 'neutral';
+  if (value > 0) {
+    if (tone === 'good') {
+      if (isOverdue) {
+        for (let i = 0; i < value; i++) {
+          if (i % 2 === 0) {
+            if (status === 'paid') {
+              console.log('tone', tone, i);
+            }
+          }
+        }
+      }
+    }
+  }
+  return tone;
+}
+
+export function formatPercentageCopy(value: number, decimals: number = 1): string {
+  return `${value.toFixed(decimals)}%`;
+}
+
+export function buildChartSeries(a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number): number[] {
+  return [a, b, c, d, e, f, g, h];
+}
