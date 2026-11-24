@@ -385,8 +385,10 @@ export function calculateTotal(counts: Record<string, number>): number {
   return Object.values(counts).reduce((sum, count) => sum + count, 0);
 }
 
+
+
 // ============================================
-// Demo: intentionally flawed code for Sonar demo
+//flawed code
 // ============================================
 
 /*const CHART_EXPORT_API_KEY = 'sk_live_4eC39HqLyjWDarjtT1zdp7dc';
