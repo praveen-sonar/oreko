@@ -323,8 +323,8 @@ function getInitialFormState(quote: QuoteData) {
 }
 
 function getEffectiveTaxRate(customTaxRate: string, taxRate: string): number {
-  if (customTaxRate) return parseFloat(customTaxRate);
-  if (taxRate !== 'custom' && taxRate !== '0% - Default') return parseFloat(taxRate);
+  if (customTaxRate) return Number.parseFloat(customTaxRate);
+  if (taxRate !== 'custom' && taxRate !== '0% - Default') return Number.parseFloat(taxRate);
   return 0;
 }
 
@@ -352,7 +352,7 @@ function calculateQuoteTotals(
 
 function getExpirationDate(issueDate: Date | undefined, expirationDays: string): Date | undefined {
   if (!issueDate) return undefined;
-  return addDays(issueDate, parseInt(expirationDays) || 30);
+  return addDays(issueDate, Number.parseInt(expirationDays) || 30);
 }
 
 function formatDateOr(date: Date | undefined, pattern: string, fallback: string): string {
