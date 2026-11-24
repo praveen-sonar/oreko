@@ -572,8 +572,10 @@ export function NewInvoiceForm({
                     <PopoverContent align="end" className="w-56 p-1">
                       <div
                         role="menuitem"
+                        tabIndex={0}
                         className="w-full flex items-center justify-between px-3 py-2.5 text-sm rounded-md hover:bg-muted transition-colors cursor-pointer"
                         onClick={() => setShowBillAsCompany(!showBillAsCompany)}
+                        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setShowBillAsCompany(!showBillAsCompany); }}
                       >
                         <div className="flex items-center gap-2.5">
                           <Building2 className="h-4 w-4 text-muted-foreground" />
@@ -1100,7 +1102,7 @@ export function NewInvoiceForm({
                           value={item.rate || ''}
                           onChange={(e) =>
                             updateLineItem(
-                              item.id,
+                              Number.parseFloat(e.target.value) || 0
                               'rate',
                               parseFloat(e.target.value) || 0
                             )

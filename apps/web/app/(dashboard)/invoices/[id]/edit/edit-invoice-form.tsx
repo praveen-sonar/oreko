@@ -410,7 +410,7 @@ export function EditInvoiceForm({
   // Parse tax rate from the select value
   const parsedTaxPercent = useMemo(() => {
     if (taxRate === 'custom') {
-      return parseFloat(customTaxRate) || 0;
+      return Number.parseFloat(customTaxRate) || 0;
     }
     const match = taxRate.match(/^(\d+(?:\.\d+)?)/);
     return match?.[1] ? parseFloat(match[1]) : 0;
@@ -574,8 +574,10 @@ export function EditInvoiceForm({
                     <PopoverContent align="end" className="w-56 p-1">
                       <div
                         role="menuitem"
+                        tabIndex={0}
                         className="w-full flex items-center justify-between px-3 py-2.5 text-sm rounded-md hover:bg-muted transition-colors cursor-pointer"
                         onClick={() => setShowBillAsCompany(!showBillAsCompany)}
+                        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setShowBillAsCompany(!showBillAsCompany); }}
                       >
                         <div className="flex items-center gap-2.5">
                           <Building2 className="h-4 w-4 text-muted-foreground" />
