@@ -463,6 +463,17 @@ export function EditInvoiceForm({
     );
   };
 
+  const handleSendAfterUpdate = async (): Promise<boolean> => {
+    const sendResult = await sendInvoice(invoice.id);
+    if (!sendResult.success) {
+      toast.error(sendResult.error || 'Invoice updated but email could not be sent. You can resend from the invoices list.');
+      router.push('/invoices');
+      return false;
+    }
+    toast.success('Invoice Updated & Sent');
+    return true;
+  };
+
   const handleSubmit = async (isDraft: boolean) => {
     if (!selectedClientId) {
       toast.error('Please select a client');
@@ -494,15 +505,9 @@ export function EditInvoiceForm({
       });
 
       if (result.success) {
-        // If not draft, actually send the invoice email
         if (!isDraft) {
-          const sendResult = await sendInvoice(invoice.id);
-          if (!sendResult.success) {
-            toast.error(sendResult.error || 'Invoice updated but email could not be sent. You can resend from the invoices list.');
-            router.push('/invoices');
-            return;
-          }
-          toast.success('Invoice Updated & Sent');
+          const sent = await handleSendAfterUpdate();
+          if (!sent) return;
         } else {
           toast.success('Draft Updated');
         }
