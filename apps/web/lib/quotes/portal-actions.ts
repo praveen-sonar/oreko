@@ -325,6 +325,141 @@ export async function trackQuoteView(accessToken: string): Promise<void> {
 }
 
 /**
+ * Verify OTP for quote signing. Returns an error message, or null if verification passed.
+ */
+async function verifyQuoteOtp(accessToken: string, otpCode?: string): Promise<string | null> {
+  const { verifySigningOtp, isSigningVerified } = await import('@/lib/signing/otp');
+  const quoteForOtp = await prisma.quote.findFirst({
+    where: { accessToken, deletedAt: null },
+    select: { id: true, client: { select: { email: true } }, settings: true },
+  });
+  if (!quoteForOtp) {
+    return 'Quote not found';
+  }
+  const otpSettings = (quoteForOtp.settings as Record<string, unknown>) ?? {};
+  const requireOtp = (otpSettings.requireOtpVerification as boolean) ?? false;
+  const otpKey = `quote:${quoteForOtp.id}`;
+
+  if (otpCode) {
+    if (!quoteForOtp.client?.email) {
+      return 'Could not verify identity — client email not found';
+    }
+    const otpResult = await verifySigningOtp(otpKey, otpCode, quoteForOtp.client.email);
+    if (!otpResult.valid) {
+      return otpResult.error || 'OTP verification failed';
+    }
+    return null;
+  }
+
+  if (!requireOtp) {
+    return null;
+  }
+  // OTP is required but not provided — check if already verified in a prior step
+  const alreadyVerified = await isSigningVerified(otpKey);
+  if (!alreadyVerified) {
+    return 'Identity verification is required. Please complete the OTP step.';
+  }
+  return null;
+}
+
+/**
+ * Validate signature data. Returns an error message, or null if the signature is valid.
+ */
+function validateSignature(signatureData: string, signerName: string): string | null {
+  if (!signatureData || !signerName) {
+    return 'Signature is required';
+  }
+  const isDrawn = signatureData.startsWith('data:image/png;base64,');
+  const isTyped = signatureData.startsWith('typed:');
+  if (!isDrawn && !isTyped) {
+    return 'Invalid signature format';
+  }
+  if (isDrawn) {
+    const signatureBase64 = signatureData.replace('data:image/png;base64,', '');
+    if (signatureBase64.length < 1000) {
+      return 'Signature is too simple. Please provide a full signature.';
+    }
+  }
+  if (isTyped) {
+    const typedName = signatureData.replace('typed:', '').trim();
+    if (typedName.length < 2) {
+      return 'Please type your full name as signature.';
+    }
+  }
+  return null;
+}
+
+/**
+ * Check whether a quote can be accepted. Returns an error message, or null if acceptable.
+ */
+function getQuoteAcceptabilityError(quote: {
+  status: string;
+  expirationDate: Date | string | null;
+}): string | null {
+  if (!['sent', 'viewed'].includes(quote.status)) {
+    return 'This quote cannot be accepted';
+  }
+  if (quote.expirationDate && new Date(quote.expirationDate) < new Date()) {
+    return 'This quote has expired';
+  }
+  return null;
+}
+
+/**
+ * Auto-create an invoice from an accepted quote. Failures are logged and do not throw.
+ */
+async function autoCreateInvoiceForQuote(
+  quoteId: string,
+  workspaceId: string
+): Promise<{ id: string; accessToken: string } | undefined> {
+  try {
+    const invoiceResult = await createInvoiceFromQuoteInternal(quoteId, workspaceId);
+    if (invoiceResult.success && invoiceResult.invoice) {
+      return invoiceResult.invoice;
+    }
+  } catch (error) {
+    // Log but don't fail acceptance - invoice can be created manually
+    logger.error({ err: error }, 'Auto-invoice creation failed');
+  }
+  return undefined;
+}
+
+/**
+ * Create a deposit payment schedule for an invoice. Returns the deposit amount.
+ */
+async function createDepositSchedule(
+  invoiceId: string,
+  quoteSettings: Record<string, unknown>,
+  total: number
+): Promise<number> {
+  const depositType = (quoteSettings.depositType as 'percentage' | 'fixed') ?? 'percentage';
+  const depositValue = (quoteSettings.depositValue as number) ?? 50;
+  const isPercentage = depositType === 'percentage';
+  const depositAmount = isPercentage
+    ? Math.round(total * (depositValue / 100) * 100) / 100
+    : Math.min(depositValue, total);
+  const depositLabel = isPercentage ? `${depositValue}%` : `$${depositValue}`;
+
+  try {
+    await prisma.paymentSchedule.create({
+      data: {
+        invoiceId,
+        type: 'deposit',
+        description: `Deposit (${depositLabel})`,
+        amount: depositAmount,
+        percentage: isPercentage ? depositValue : null,
+        dueDate: new Date(),
+        status: 'pending',
+      },
+    });
+  } catch (error) {
+    logger.error({ err: error }, 'Deposit schedule creation failed');
+  }
+
+  return depositAmount;
+}
+
+/**
  * Accept a quote with signature.
  * OTP verification is enforced when otpCode is provided.
  */
@@ -347,34 +482,9 @@ export async function acceptQuote(data: {
 
     // Bug #1: Fix OTP key mismatch — use quote:<quoteId> matching sendSigningOtp
     // Also enforce that OTP was completed (not just optionally provided)
-    {
-      const { verifySigningOtp, isSigningVerified } = await import('@/lib/signing/otp');
-      const quoteForOtp = await prisma.quote.findFirst({
-        where: { accessToken: data.accessToken, deletedAt: null },
-        select: { id: true, client: { select: { email: true } }, settings: true },
-      });
-      if (!quoteForOtp) {
-        return { success: false, error: 'Quote not found' };
-      }
-      const otpSettings = (quoteForOtp.settings as Record<string, unknown>) ?? {};
-      const requireOtp = (otpSettings.requireOtpVerification as boolean) ?? false;
-      const otpKey = `quote:${quoteForOtp.id}`;
-
-      if (data.otpCode) {
-        if (!quoteForOtp.client?.email) {
-          return { success: false, error: 'Could not verify identity — client email not found' };
-        }
-        const otpResult = await verifySigningOtp(otpKey, data.otpCode, quoteForOtp.client.email);
-        if (!otpResult.valid) {
-          return { success: false, error: otpResult.error || 'OTP verification failed' };
-        }
-      } else if (requireOtp) {
-        // OTP is required but not provided — check if already verified in a prior step
-        const alreadyVerified = await isSigningVerified(otpKey);
-        if (!alreadyVerified) {
-          return { success: false, error: 'Identity verification is required. Please complete the OTP step.' };
-        }
-      }
+    const otpError = await verifyQuoteOtp(data.accessToken, data.otpCode);
+    if (otpError) {
+      return { success: false, error: otpError };
     }
 
     // Bug #68: Only validate signatureData if the quote actually requires signature
@@ -386,27 +496,11 @@ export async function acceptQuote(data: {
     const sigSettings = (quoteForSigCheck?.settings as Record<string, unknown>) ?? {};
     const requireSignature = (sigSettings.requireSignature as boolean) ?? true;
 
-    if (requireSignature) {
-      if (!data.signatureData || !data.signerName) {
-        return { success: false, error: 'Signature is required' };
-      }
-      const isDrawn = data.signatureData.startsWith('data:image/png;base64,');
-      const isTyped = data.signatureData.startsWith('typed:');
-      if (!isDrawn && !isTyped) {
-        return { success: false, error: 'Invalid signature format' };
-      }
-      if (isDrawn) {
-        const signatureBase64 = data.signatureData.replace('data:image/png;base64,', '');
-        if (signatureBase64.length < 1000) {
-          return { success: false, error: 'Signature is too simple. Please provide a full signature.' };
-        }
-      }
-      if (isTyped) {
-        const typedName = data.signatureData.replace('typed:', '').trim();
-        if (typedName.length < 2) {
-          return { success: false, error: 'Please type your full name as signature.' };
-        }
-      }
+    const signatureError = requireSignature
+      ? validateSignature(data.signatureData, data.signerName)
+      : null;
+    if (signatureError) {
+      return { success: false, error: signatureError };
     }
     if (data.signerName.trim().length < 2) {
       return { success: false, error: 'Please enter your full name' };
@@ -447,14 +541,10 @@ export async function acceptQuote(data: {
       return { success: false, error: 'Quote not found' };
     }
 
-    // Check if quote can be accepted
-    if (!['sent', 'viewed'].includes(quote.status)) {
-      return { success: false, error: 'This quote cannot be accepted' };
-    }
-
-    // Check expiration
-    if (quote.expirationDate && new Date(quote.expirationDate) < new Date()) {
-      return { success: false, error: 'This quote has expired' };
+    // Check if quote can be accepted and has not expired
+    const acceptabilityError = getQuoteAcceptabilityError(quote);
+    if (acceptabilityError) {
+      return { success: false, error: acceptabilityError };
     }
 
     // Compute document hash for tamper-proofing
@@ -540,44 +630,18 @@ export async function acceptQuote(data: {
     const quoteSettings = (quote.settings as Record<string, unknown>) ?? {};
     const shouldAutoInvoice = (quoteSettings.autoConvertToInvoice as boolean) ?? false;
 
-    let autoInvoice: { id: string; accessToken: string } | undefined;
-    if (shouldAutoInvoice) {
-      try {
-        const invoiceResult = await createInvoiceFromQuoteInternal(quote.id, quote.workspaceId);
-        if (invoiceResult.success && invoiceResult.invoice) {
-          autoInvoice = invoiceResult.invoice;
-        }
-      } catch (error) {
-        // Log but don't fail acceptance - invoice can be created manually
-        logger.error({ err: error }, 'Auto-invoice creation failed');
-      }
-    }
+    const autoInvoice = shouldAutoInvoice
+      ? await autoCreateInvoiceForQuote(quote.id, quote.workspaceId)
+      : undefined;
 
     // Process deposit payment if required (and invoice was created)
     const depositRequired = (quoteSettings.depositRequired as boolean) ?? false;
     if (depositRequired && autoInvoice) {
-      const depositType = (quoteSettings.depositType as 'percentage' | 'fixed') ?? 'percentage';
-      const depositValue = (quoteSettings.depositValue as number) ?? 50;
-      const total = toNumber(quote.total);
-      const depositAmount = depositType === 'percentage'
-        ? Math.round(total * (depositValue / 100) * 100) / 100
-        : Math.min(depositValue, total);
-
-      try {
-        await prisma.paymentSchedule.create({
-          data: {
-            invoiceId: autoInvoice.id,
-            type: 'deposit',
-            description: `Deposit (${depositType === 'percentage' ? `${depositValue}%` : `$${depositValue}`})`,
-            amount: depositAmount,
-            percentage: depositType === 'percentage' ? depositValue : null,
-            dueDate: new Date(),
-            status: 'pending',
-          },
-        });
-      } catch (error) {
-        logger.error({ err: error }, 'Deposit schedule creation failed');
-      }
+      const depositAmount = await createDepositSchedule(
+        autoInvoice.id,
+        quoteSettings,
+        toNumber(quote.total)
+      );
 
       return {
         success: true,

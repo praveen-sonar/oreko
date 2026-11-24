@@ -267,6 +267,112 @@ const QUOTE_TEMPLATES: Record<string, QuoteTemplate> = {
 
 type TemplateName = keyof typeof QUOTE_TEMPLATES;
 
+// ─── Helpers ─────────────────────────────────────────────
+function getInitialExpirationDays(quote: QuoteData): string {
+  if (quote.issueDate && quote.expirationDate) {
+    const days = differenceInDays(new Date(quote.expirationDate), new Date(quote.issueDate));
+    // Match to nearest preset
+    const presets = [7, 14, 30, 45, 60, 90];
+    const closest = presets.find(p => p === days) || 30;
+    return String(closest);
+  }
+  return '30';
+}
+
+function getInitialTaxRate(firstTaxRate: number | null | undefined): string {
+  if (!firstTaxRate || firstTaxRate === 0) return '0% - Default';
+  if (firstTaxRate === 5) return '5% - GST';
+  if (firstTaxRate === 10) return '10% - VAT';
+  if (firstTaxRate === 18) return '18% - GST';
+  return 'custom';
+}
+
+function getInitialFormState(quote: QuoteData) {
+  const issueDate = quote.issueDate ? new Date(quote.issueDate) : new Date();
+
+  // Convert blocks to line items
+  const lineItems: LineItem[] = quote.blocks
+    .filter(b => b.type === 'service-item')
+    .map(b => ({
+      id: b.id,
+      name: b.content.name || '',
+      description: b.content.description || '',
+      quantity: b.content.quantity || 1,
+      rate: b.content.rate || 0,
+    }));
+
+  // Determine initial tax rate from blocks
+  const firstTaxRate = quote.blocks.find(b => b.type === 'service-item')?.content.taxRate;
+  const taxRate = getInitialTaxRate(firstTaxRate);
+  const customTaxRate = taxRate === 'custom' && firstTaxRate ? String(firstTaxRate) : '';
+
+  // Discount
+  const discountValue = quote.totals.discountValue || 0;
+  const discountType: 'flat' | 'percent' =
+    quote.totals.discountType === 'percentage' ? 'percent' : 'flat';
+
+  return {
+    issueDate,
+    expirationDays: getInitialExpirationDays(quote),
+    lineItems,
+    taxRate,
+    customTaxRate,
+    discountValue,
+    discountType,
+  };
+}
+
+function getEffectiveTaxRate(customTaxRate: string, taxRate: string): number {
+  if (customTaxRate) return parseFloat(customTaxRate);
+  if (taxRate !== 'custom' && taxRate !== '0% - Default') return parseFloat(taxRate);
+  return 0;
+}
+
+function calculateQuoteTotals(
+  lineItems: LineItem[],
+  discountType: 'flat' | 'percent',
+  discount: number,
+  customTaxRate: string,
+  taxRate: string
+) {
+  // Round each line item to match server-side calculation (Bug #178)
+  const subtotal = Math.round(lineItems.reduce(
+    (acc, item) => acc + Math.round(item.quantity * item.rate * 100) / 100,
+    0
+  ) * 100) / 100;
+  const discountAmount = Math.round((discountType === 'percent'
+    ? subtotal * (discount / 100)
+    : discount) * 100) / 100;
+  const effectiveTaxRate = getEffectiveTaxRate(customTaxRate, taxRate);
+  const discountedSubtotal = Math.max(0, Math.round((subtotal - discountAmount) * 100) / 100);
+  const taxAmount = effectiveTaxRate > 0 ? Math.round(discountedSubtotal * (effectiveTaxRate / 100) * 100) / 100 : 0;
+  const total = Math.max(0, Math.round((discountedSubtotal + taxAmount) * 100) / 100);
+  return { subtotal, discountAmount, total };
+}
+
+function getExpirationDate(issueDate: Date | undefined, expirationDays: string): Date | undefined {
+  if (!issueDate) return undefined;
+  return addDays(issueDate, parseInt(expirationDays) || 30);
+}
+
+function formatDateOr(date: Date | undefined, pattern: string, fallback: string): string {
+  return date ? format(date, pattern) : fallback;
+}
+
+function pluralSuffix(count: number): string {
+  return count === 1 ? '' : 's';
+}
+
+function getCardStyle(template: QuoteTemplate) {
+  return template.bgTint ? { background: template.bgTint } : undefined;
+}
+
+function getValidityLabel(expirationDate: Date | undefined, issueDate: Date | undefined): string {
+  if (expirationDate) return `Valid until ${format(expirationDate, 'MMM dd, yyyy')}`;
+  if (issueDate) return `Issued ${format(issueDate, 'MMM dd, yyyy')}`;
+  return 'Issued ...';
+}
+
 // ─── Main Component ──────────────────────────────────────
 interface EditQuoteFormProps {
   quote: QuoteData;
@@ -294,63 +400,24 @@ export default function EditQuoteForm({ quote }: EditQuoteFormProps) {
   }, []);
 
   // ─── Pre-fill form state from quote data ─────────────
+  const initialState = getInitialFormState(quote);
   const [quoteNumber] = useState(quote.quoteNumber);
-  const [issueDate, setIssueDate] = useState<Date | undefined>(
-    quote.issueDate ? new Date(quote.issueDate) : new Date()
-  );
+  const [issueDate, setIssueDate] = useState<Date | undefined>(initialState.issueDate);
 
-  // Calculate expiration days from issue/expiration dates
-  const initialExpirationDays = (() => {
-    if (quote.issueDate && quote.expirationDate) {
-      const days = differenceInDays(new Date(quote.expirationDate), new Date(quote.issueDate));
-      // Match to nearest preset
-      const presets = [7, 14, 30, 45, 60, 90];
-      const closest = presets.find(p => p === days) || 30;
-      return String(closest);
-    }
-    return '30';
-  })();
-
-  const [expirationDays, setExpirationDays] = useState(initialExpirationDays);
+  const [expirationDays, setExpirationDays] = useState(initialState.expirationDays);
   const [selectedClientId, setSelectedClientId] = useState<string>(quote.clientId || '');
 
-  // Convert blocks to line items
-  const initialLineItems: LineItem[] = quote.blocks
-    .filter(b => b.type === 'service-item')
-    .map(b => ({
-      id: b.id,
-      name: b.content.name || '',
-      description: b.content.description || '',
-      quantity: b.content.quantity || 1,
-      rate: b.content.rate || 0,
-    }));
+  const [lineItems, setLineItems] = useState<LineItem[]>(initialState.lineItems);
 
-  const [lineItems, setLineItems] = useState<LineItem[]>(
-    initialLineItems.length > 0 ? initialLineItems : []
-  );
-
-  // Determine initial tax rate from blocks
-  const firstTaxRate = quote.blocks.find(b => b.type === 'service-item')?.content.taxRate;
-  const initialTaxRate = (() => {
-    if (!firstTaxRate || firstTaxRate === 0) return '0% - Default';
-    if (firstTaxRate === 5) return '5% - GST';
-    if (firstTaxRate === 10) return '10% - VAT';
-    if (firstTaxRate === 18) return '18% - GST';
-    return 'custom';
-  })();
-
-  const [taxRate, setTaxRate] = useState(initialTaxRate);
-  const [customTaxRate, setCustomTaxRate] = useState(
-    initialTaxRate === 'custom' && firstTaxRate ? String(firstTaxRate) : ''
-  );
+  const [taxRate, setTaxRate] = useState(initialState.taxRate);
+  const [customTaxRate, setCustomTaxRate] = useState(initialState.customTaxRate);
   const [notes, setNotes] = useState(quote.notes || '');
   const [terms, setTerms] = useState(quote.terms || '');
 
   // Discount
-  const initialDiscountValue = quote.totals.discountValue || 0;
-  const initialDiscountType = quote.totals.discountType === 'percentage' ? 'percent' as const : 'flat' as const;
+  const initialDiscountValue = initialState.discountValue;
   const [discount, setDiscount] = useState(initialDiscountValue);
-  const [discountType, setDiscountType] = useState<'flat' | 'percent'>(initialDiscountType);
+  const [discountType, setDiscountType] = useState<'flat' | 'percent'>(initialState.discountType);
 
   // Quote Details Options
   const [showBillAsCompany, setShowBillAsCompany] = useState(false);
@@ -402,22 +469,15 @@ export default function EditQuoteForm({ quote }: EditQuoteFormProps) {
 
   const tpl = (QUOTE_TEMPLATES[templateName] ?? QUOTE_TEMPLATES.clean) as QuoteTemplate;
 
-  // Round each line item to match server-side calculation (Bug #178)
-  const subtotal = Math.round(lineItems.reduce(
-    (acc, item) => acc + Math.round(item.quantity * item.rate * 100) / 100,
-    0
-  ) * 100) / 100;
-  const discountAmount = Math.round((discountType === 'percent'
-    ? subtotal * (discount / 100)
-    : discount) * 100) / 100;
-  const effectiveTaxRate = customTaxRate ? parseFloat(customTaxRate) : (taxRate !== 'custom' && taxRate !== '0% - Default' ? parseFloat(taxRate) : 0);
-  const discountedSubtotal = Math.max(0, Math.round((subtotal - discountAmount) * 100) / 100);
-  const taxAmount = effectiveTaxRate > 0 ? Math.round(discountedSubtotal * (effectiveTaxRate / 100) * 100) / 100 : 0;
-  const total = Math.max(0, Math.round((discountedSubtotal + taxAmount) * 100) / 100);
+  const { subtotal, discountAmount, total } = calculateQuoteTotals(
+    lineItems,
+    discountType,
+    discount,
+    customTaxRate,
+    taxRate
+  );
 
-  const expirationDate = issueDate
-    ? addDays(issueDate, parseInt(expirationDays) || 30)
-    : undefined;
+  const expirationDate = getExpirationDate(issueDate, expirationDays);
 
   // ─── Handlers ────────────────────────────────────────
   const addLineItem = () => {
@@ -752,9 +812,7 @@ export default function EditQuoteForm({ quote }: EditQuoteFormProps) {
                           )}
                         >
                           <CalendarIcon className="mr-2 h-3.5 w-3.5 text-muted-foreground" />
-                          {issueDate
-                            ? format(issueDate, 'MMM do, yyyy')
-                            : 'Pick date'}
+                          {formatDateOr(issueDate, 'MMM do, yyyy', 'Pick date')}
                         </Button>
                       </PopoverTrigger>
                       <PopoverContent className="w-auto p-0" align="start">
@@ -974,7 +1032,7 @@ export default function EditQuoteForm({ quote }: EditQuoteFormProps) {
                               )}
                             >
                               <CalendarIcon className="mr-2 h-3.5 w-3.5" />
-                              {eventDate ? format(eventDate, 'MMM do, yyyy') : 'Event date'}
+                              {formatDateOr(eventDate, 'MMM do, yyyy', 'Event date')}
                             </Button>
                           </PopoverTrigger>
                           <PopoverContent className="w-auto p-0" align="start">
@@ -1429,7 +1487,7 @@ export default function EditQuoteForm({ quote }: EditQuoteFormProps) {
                 tpl.cardClass,
                 tpl.style === 'glassmorphism' && 'backdrop-blur-xl bg-white/70 border-white/40',
               )}
-              style={tpl.bgTint ? { background: tpl.bgTint } : undefined}
+              style={getCardStyle(tpl)}
               >
                 {/* ─── Subtle top-left wave decoration ─── */}
                 <svg className="absolute top-0 left-0 pointer-events-none" viewBox="0 0 200 120" fill="none" style={{ width: '45%', height: '100px' }}>
@@ -1487,7 +1545,7 @@ export default function EditQuoteForm({ quote }: EditQuoteFormProps) {
                     {formatCurrency(total, currency)}
                   </p>
                   <p className="text-xs text-muted-foreground mt-1">
-                    Quote #{quoteNumber} · {expirationDate ? `Valid until ${format(expirationDate, 'MMM dd, yyyy')}` : `Issued ${issueDate ? format(issueDate, 'MMM dd, yyyy') : '...'}`}
+                    Quote #{quoteNumber} · {getValidityLabel(expirationDate, issueDate)}
                   </p>
                 </div>
 
@@ -1624,7 +1682,7 @@ export default function EditQuoteForm({ quote }: EditQuoteFormProps) {
             {previewTab === 'pdf' && (
             <div className="p-4 flex-1 flex flex-col items-center">
               <p className="text-xs text-muted-foreground mb-3 w-full">
-                A4 Preview · {lineItems.length} item{lineItems.length !== 1 ? 's' : ''}
+                A4 Preview · {lineItems.length} item{pluralSuffix(lineItems.length)}
               </p>
 
               <div className="w-full overflow-hidden flex-1 flex items-start justify-center">
@@ -1667,7 +1725,7 @@ export default function EditQuoteForm({ quote }: EditQuoteFormProps) {
                         <h1 className="text-2xl font-bold tracking-tight" style={{ color: tpl.accent }}>QUOTE</h1>
                         <p className="text-xs mt-1" style={{ color: '#666' }}>#{quoteNumber}</p>
                         <p className="text-xs" style={{ color: '#666' }}>
-                          Date: {issueDate ? format(issueDate, 'MMM dd, yyyy') : 'Not set'}
+                          Date: {formatDateOr(issueDate, 'MMM dd, yyyy', 'Not set')}
                         </p>
                         {expirationDate && (
                           <p className="text-xs" style={{ color: '#666' }}>
@@ -1773,7 +1831,7 @@ export default function EditQuoteForm({ quote }: EditQuoteFormProps) {
                       <p className="text-xs text-muted-foreground">{businessName}</p>
                       <p className="font-bold text-lg mt-0.5" style={{ color: tpl.accent }}>Quote</p>
                       <p className="text-xs text-muted-foreground mt-0.5">
-                        Valid until {expirationDate ? format(expirationDate, 'MMM dd, yyyy') : '...'}
+                        Valid until {formatDateOr(expirationDate, 'MMM dd, yyyy', '...')}
                       </p>
                     </div>
                   </div>
@@ -1887,7 +1945,7 @@ export default function EditQuoteForm({ quote }: EditQuoteFormProps) {
                   <p style={{ fontSize: '22px', fontWeight: 700, color: tpl.accent, letterSpacing: '0.05em' }}>QUOTE</p>
                   <p style={{ fontSize: '11px', color: '#666', marginTop: '4px' }}>#{quoteNumber}</p>
                   <p style={{ fontSize: '11px', color: '#666' }}>
-                    Date: {issueDate ? format(issueDate, 'MMM dd, yyyy') : 'Not set'}
+                    Date: {formatDateOr(issueDate, 'MMM dd, yyyy', 'Not set')}
                   </p>
                   {expirationDate && (
                     <p style={{ fontSize: '11px', color: '#666' }}>
