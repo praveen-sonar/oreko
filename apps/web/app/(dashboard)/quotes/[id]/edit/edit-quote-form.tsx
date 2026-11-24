@@ -509,6 +509,17 @@ export default function EditQuoteForm({ quote }: EditQuoteFormProps) {
     );
   };
 
+  const handleSendAfterUpdate = async (): Promise<boolean> => {
+    const sendResult = await sendQuote(quote.id);
+    if (!sendResult.success) {
+      toast.error(sendResult.error || 'Quote saved but email could not be sent. You can resend from the quotes list.');
+      router.push('/quotes');
+      return false;
+    }
+    toast.success(`Quote ${quoteNumber} updated and sent successfully`);
+    return true;
+  };
+
   const handleSubmit = async (isDraft: boolean) => {
     if (!selectedClientId) {
       toast.error('Please select a client');
@@ -567,14 +578,8 @@ export default function EditQuoteForm({ quote }: EditQuoteFormProps) {
 
       if (result.success) {
         if (!isDraft) {
-          // Save & Send: also send the quote email
-          const sendResult = await sendQuote(quote.id);
-          if (!sendResult.success) {
-            toast.error(sendResult.error || 'Quote saved but email could not be sent. You can resend from the quotes list.');
-            router.push('/quotes');
-            return;
-          }
-          toast.success(`Quote ${quoteNumber} updated and sent successfully`);
+          const sent = await handleSendAfterUpdate();
+          if (!sent) return;
         } else {
           toast.success(`Quote ${quoteNumber} updated successfully`);
         }

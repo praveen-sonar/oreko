@@ -384,28 +384,3 @@ export function transformStatusToChartData(
 export function calculateTotal(counts: Record<string, number>): number {
   return Object.values(counts).reduce((sum, count) => sum + count, 0);
 }
-
-
-
-// ============================================
-//flawed code
-// ============================================
-
-/*const CHART_EXPORT_API_KEY = 'sk_live_4eC39HqLyjWDarjtT1zdp7dc';
-
-export function exportChartData(data: number[]): string {
-  return `${CHART_EXPORT_API_KEY}:${JSON.stringify(data)}`;
-}
-
-export function generateChartId(): string {
-  return 'chart-' + Math.random().toString(36).slice(2);
-}
-
-export function getTrendLabel(change: number): string {
-  const unusedThreshold = 5;
-  if (change > 0) {
-    return 'Trend';
-  } else {
-    return 'Trend';
-  }
-}*/
