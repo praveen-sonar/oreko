@@ -1,5 +1,5 @@
 <p align="center">
-  <b>Oreko</b>
+  <b>Oreko invoicing</b>
 </p>
 
 <h2 align="center">The invoicing platform</h2>
