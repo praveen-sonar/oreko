@@ -1,8 +1,8 @@
 {
-  "models": [
+  "perspectives": [
     {
       "language": "typescript",
-      "type": "namespace",
+      "qualifiers": "namespace",
       "label": "typescript Intended Model",
       "description": "Oreko is a Turborepo monorepo. The shared packages (types, utils, database, ui) are the foundation and do not depend on each other or on the web app. Inside apps/web, routes sit on top of components, components sit on top of lib (server actions and domain logic), and lib sits on top of the shared packages.",
       "groups": [
