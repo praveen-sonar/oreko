@@ -69,7 +69,7 @@ function applyFontSize(key: FontSizeKey) {
 }
 
 function applySidebarStyle(key: SidebarStyleKey) {
-  document.documentElement.setAttribute('data-sidebar-style', key);
+  document.documentElement.dataset.sidebarStyle = key;
 }
 
 function isValidFontSize(v: unknown): v is FontSizeKey {

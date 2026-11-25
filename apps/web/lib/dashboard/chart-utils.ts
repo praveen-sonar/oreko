@@ -384,4 +384,3 @@ export function transformStatusToChartData(
 export function calculateTotal(counts: Record<string, number>): number {
   return Object.values(counts).reduce((sum, count) => sum + count, 0);
 }
-
