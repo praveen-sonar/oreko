@@ -1,0 +1,60 @@
+{
+  "models": [
+    {
+      "language": "typescript",
+      "type": "namespace",
+      "label": "typescript Intended Model",
+      "description": "Oreko is a Turborepo monorepo. The shared packages (types, utils, database, ui) are the foundation and do not depend on each other or on the web app. Inside apps/web, routes sit on top of components, components sit on top of lib (server actions and domain logic), and lib sits on top of the shared packages.",
+      "groups": [
+        {
+          "label": "packages-types",
+          "patterns": ["packages/types/**"],
+          "description": "Shared TypeScript types and enums used across the monorepo. Has no internal dependencies."
+        },
+        {
+          "label": "packages-utils",
+          "patterns": ["packages/utils/**"],
+          "description": "Framework-agnostic helper functions shared across the monorepo. Has no internal dependencies."
+        },
+        {
+          "label": "packages-database",
+          "patterns": ["packages/database/**"],
+          "description": "Prisma schema and client. The only place that talks to PostgreSQL directly."
+        },
+        {
+          "label": "packages-ui",
+          "patterns": ["packages/ui/**"],
+          "description": "Shared UI primitives reusable outside the web app."
+        },
+        {
+          "label": "web-app",
+          "patterns": ["apps/web/app/**"],
+          "description": "Next.js App Router pages, layouts and API routes: auth, dashboard, public client portal and webhooks. Composes components and calls lib."
+        },
+        {
+          "label": "web-components",
+          "patterns": ["apps/web/components/**"],
+          "description": "React components by feature (quotes, invoices, clients, payments, ...) plus Shadcn UI. Presentation only; mutations go through lib actions."
+        },
+        {
+          "label": "web-lib",
+          "patterns": ["apps/web/lib/**"],
+          "description": "Server actions, domain logic, validations, auth, email, PDF, payments and integrations. Reaches the database through packages-database."
+        }
+      ],
+      "constraints": [
+        { "from": "web-app",        "to": "web-components" },
+        { "from": "web-app",        "to": "web-lib" },
+        { "from": "web-app",        "to": "packages-types" },
+        { "from": "web-app",        "to": "packages-utils" },
+        { "from": "web-components", "to": "web-lib" },
+        { "from": "web-components", "to": "packages-ui" },
+        { "from": "web-components", "to": "packages-types" },
+        { "from": "web-components", "to": "packages-utils" },
+        { "from": "web-lib",        "to": "packages-database" },
+        { "from": "web-lib",        "to": "packages-types" },
+        { "from": "web-lib",        "to": "packages-utils" }
+      ]
+    }
+  ]
+}
