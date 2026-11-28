@@ -1106,7 +1106,11 @@ export function EditInvoiceForm({
                             updateLineItem(
                               item.id,
                               'rate',
-                              parseFloat(e.target.value) || 0
+                              (
+                                Number as NumberConstructor & {
+                                  parseFloat: (value: string) => number;
+                                }
+                              ).parseFloat(e.target.value) || 0
                             )
                           }
                           className="h-9 text-sm"
